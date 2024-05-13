@@ -1,17 +1,19 @@
 #include <SFML/Graphics.hpp>
 #include <SFML/System.hpp>
-
 #include <random>
 #include <time.h>
 #include <iostream>
-
 #include <fstream>
 #include <sstream>
+#include <string.h>
 #include <string>
 #include <cmath>
-
 #include <vector>
+#include <iostream>
 #include <map>
+
+#include <pthread.h>
+#include <semaphore.h>
 
 // PACMAN.h
 enum Dir
@@ -94,6 +96,8 @@ struct GameState
 	int ghosts_eaten_in_powerup = 0;
 
 	Player* player;
+
+    Dir inputDir;
 
 	std::vector<std::string> board;
 
@@ -268,14 +272,7 @@ void PlayerMovement()
 {
 	Dir try_dir = NONE;
 
-	if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up))
-		try_dir = UP;
-	if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down))
-		try_dir = DOWN;
-	if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right))
-		try_dir = RIGHT;
-	if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left))
-		try_dir = LEFT;
+    try_dir = gState.inputDir;
 
 	if (try_dir != NONE &&
 		!PlayerTileCollision(try_dir, gState.player->pos) &&
@@ -318,9 +315,7 @@ void PlayerMovement()
 struct Textures
 {
 	sf::Texture pellets;
-	sf::Texture pacman[5];
-    sf::Texture testing;
-    sf::Texture sprites;
+	sf::Texture sprites;
 	sf::Texture wall_map_t;
 	sf::Texture wall_map_t_white;
 
@@ -379,6 +374,154 @@ void DrawMenuFrame();
 void ClearText();
 void MakeText(std::string string, int x, int y, sf::Color f_color);
 
+// ANIMATE.H
+
+struct Animation
+{
+	int pacman_frame=0;
+	int pacman_timer=0;
+	bool assending = true;
+	
+	bool ghost_frame_2 = false;
+	int ghost_timer = 0;
+
+	int fright_flash = false;
+	int energrizer_timer = 0;
+
+	bool death_animation = false;
+
+	// genertic pulse for win condition and energizer
+	int pulse = true;
+	int pulse_timer = 0;
+
+	int pulse_limit = 200;
+};
+
+void AnimateUpdate(int ms_elapsed);
+void StartPacManDeath();
+void ResetAnimation();
+void SetPacManMenuFrame();
+
+sf::IntRect GetPacManFrame(Dir dir);
+
+void PulseUpdate(int ms_elapsed);
+bool IsPulse();
+void SetPulseFrequency(int ms);
+
+// ANIMATE.cpp
+
+
+static Animation animate;
+
+void AnimateUpdate(int ms_elapsed)
+{
+	PulseUpdate(ms_elapsed);
+
+	if (gState.player->stopped && !animate.death_animation) {
+		animate.pacman_frame = 0;
+		animate.assending = true;
+	}
+	else {
+		animate.pacman_timer += ms_elapsed;
+	}
+	
+	if (animate.death_animation) {
+		if (animate.pacman_timer > 100) {
+			animate.pacman_timer = 0;
+			animate.pacman_frame++;
+		}
+		if (animate.pacman_frame > 10)
+			gState.player->enable_draw = false;
+	}
+	else if (animate.pacman_timer > 25 && !gState.player->stopped) {
+		animate.pacman_frame += (animate.assending) ? 1 : -1;
+		animate.pacman_timer = 0;
+	}
+	if (!animate.death_animation && animate.pacman_frame > 2 || animate.pacman_frame < 0) {
+		animate.assending = !animate.assending;
+		animate.pacman_frame = (animate.pacman_frame > 2) ? 2 : 0;
+	}
+
+	animate.ghost_timer += ms_elapsed;
+	if (animate.ghost_timer > 200) {
+		animate.ghost_frame_2 = !animate.ghost_frame_2;
+		animate.ghost_timer = 0;
+	}
+
+	// start flashing with 2 seconds to go
+	if (gState.energizer_time > 0 && gState.energizer_time < 2000) {
+		animate.energrizer_timer += ms_elapsed;
+		if (animate.energrizer_timer > 200) {
+			animate.fright_flash = !animate.fright_flash;
+			animate.energrizer_timer = 0;
+		}
+	}
+	else animate.fright_flash = false;
+}
+sf::IntRect GetPacManFrame(Dir dir)
+{
+	sf::IntRect rect = { 0,0,30,30 };
+	rect.left = (2 - animate.pacman_frame) * 32;
+
+	if (animate.death_animation) {
+		rect.left = 96 + animate.pacman_frame * 32;
+
+		return rect;
+	}
+
+	if (animate.pacman_frame == 0)
+		return rect;
+
+	switch (dir)
+	{
+	case UP:
+		rect.top = 64;
+		break;
+	case DOWN:
+		rect.top = 96;
+		break;
+	case LEFT:
+		rect.top = 32;
+	}
+
+	return rect;
+}
+void StartPacManDeath()
+{
+	animate.death_animation = true;
+	animate.pacman_frame = 0;
+	animate.pacman_timer = -250;
+}
+void ResetAnimation()
+{
+	animate.pacman_frame = 0;
+	animate.death_animation = false;
+}
+void SetPacManMenuFrame()
+{
+	animate.pacman_frame = 1;
+	animate.death_animation = false;
+
+	animate.ghost_frame_2 = false;
+}
+void PulseUpdate(int ms_elapsed)
+{
+	animate.pulse_timer += ms_elapsed;
+	if (animate.pulse_timer > animate.pulse_limit) {
+		animate.pulse = !animate.pulse;
+		animate.pulse_timer = 0;
+	}
+}
+void SetPulseFrequency(int ms)
+{
+	animate.pulse_limit = ms;
+}
+bool IsPulse()
+{
+	return animate.pulse;
+}
+
+
 // RENDER.cpp
 static RenderItems RItems;
 static Textures RTextures;
@@ -396,7 +539,7 @@ void InitRender()
 
 	InitPellets();
 
-	RItems.player.setTexture(RTextures.pacman[0]);
+	RItems.player.setTexture(RTextures.sprites);
 	RItems.player.setScale({ 0.5,0.5 });
 	RItems.player.setOrigin({ 15,15 });
 
@@ -434,29 +577,12 @@ void InitWalls()
 }
 void InitTextures()
 {
-    printf("Init textures\n");
 	RTextures.pellets.loadFromFile("textures/dots.png");
-
-    RTextures.sprites.loadFromFile("textures/sprites.png");
-
-    RTextures.testing.loadFromFile("textures/PinkUp.png");
-    printf("The size of\n");
-    printf("X %d\n", RTextures.testing.getSize().x);
-    RItems.player.setTexture(RTextures.testing);
-
-	if(!RTextures.pacman[0].loadFromFile("textures/PinkUp.png")){
-        printf("COULDNT LOAD\n");
-    };
-    if(!RTextures.pacman[1].loadFromFile("textures/PinkUp.png")){
-        printf("COULDNT LOAD\n");
-    };
-    RTextures.pacman[2].loadFromFile("textures/PinkUp.png");
-    RTextures.pacman[3].loadFromFile("textures/PinkUp.png");
-    RTextures.pacman[4].loadFromFile("textures/PinkUp.png");
-
+	RTextures.sprites.loadFromFile("textures/sprites.png");
 	RTextures.wall_map_t.loadFromFile("textures/map.png");
 	RTextures.font.loadFromFile("textures/font.png");
 	RTextures.wall_map_t_white.loadFromFile("textures/map.png");
+
 	RTextures.wall_map_t_white.loadFromFile("textures/map_white.png");
 }
 
@@ -553,13 +679,18 @@ void DrawFrame()
 	gState.window->clear(sf::Color::Black);
 	DrawGameUI();
 
+	if (RItems.pow_is_off != IsPulse()) {
+		FlashPPellets();
+		RItems.pow_is_off = !RItems.pow_is_off;
+	}
+
 	static bool white_texture = false;
 	if (gState.game_state == GAMEWIN) {
-		if (!white_texture) {
+		if (IsPulse() && !white_texture) {
 			RItems.wall_map.setTexture(RTextures.wall_map_t_white);
 			white_texture = true;
 		}
-		else if (white_texture) {
+		else if (!IsPulse() && white_texture) {
 			RItems.wall_map.setTexture(RTextures.wall_map_t);
 			white_texture = false;
 		}
@@ -572,9 +703,8 @@ void DrawFrame()
 
 	if (gState.player->enable_draw) {
 		RItems.player.setPosition(gState.player->pos.x * TSIZE, gState.player->pos.y * TSIZE + YOFFSET);
-		// RItems.player.setTexture(RTextures.pacman[gState.player->cur_dir]);
-        RItems.player.setTexture(RTextures.testing);
-        //printf("DOES THIS WORK?!\n");
+		RItems.player.setTextureRect(GetPacManFrame(gState.player->cur_dir));
+		
 		gState.window->draw(RItems.player);
 	}
 
@@ -591,7 +721,8 @@ void DrawMenuFrame()
 {
 	gState.window->clear(sf::Color::Black);
 	DrawGameUI();
-    MakeText("ENTER", 12, 25, { 255,255,255 });
+	if (IsPulse())
+		MakeText("ENTER", 12, 25, { 255,255,255 });
 	
 	MakeText("-BLINKY", 9, 8, { 255,0,0 });
 	MakeText("-PINKY", 9, 11, { 252,181,255 });
@@ -600,8 +731,7 @@ void DrawMenuFrame()
 	MakeText("-PACMAN", 9, 20, { 255,255,0 });
 
 	RItems.player.setPosition(gState.player->pos.x * TSIZE, gState.player->pos.y * TSIZE + YOFFSET);
-    
-	RItems.player.setTexture(RTextures.pacman[RIGHT]);
+	RItems.player.setTextureRect(GetPacManFrame(gState.player->cur_dir));
 
 	gState.window->draw(RItems.player);
 
@@ -622,6 +752,53 @@ void MakeText(std::string string, int x, int y, sf::Color color)
 		MakeQuad(RItems.text_va, x*TSIZE + 8 * i, y*TSIZE, 8, 8, color, font_let);
 	}
 }
+
+////////// THREADINGGG PARTTT
+
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Semaphore to signal thread termination
+sem_t semaphore;
+
+
+void* PlayerMovementThread(void* arg) {
+    while (true) {
+        // Lock the mutex to access shared resources
+        pthread_mutex_lock(&mutex);
+
+        // Player movement logic
+        PlayerMovement();  
+
+        // Unlock the mutex after accessing shared resources
+        pthread_mutex_unlock(&mutex);
+
+        // // Sleep for a short duration to control thread execution speed
+        sf::sleep(sf::milliseconds(100));
+
+        // // Check if the semaphore is signaled (indicating thread termination)
+        int semValue;
+        sem_getvalue(&semaphore, &semValue);
+        if (semValue == 1) {
+            break;
+        }
+    }
+    return nullptr;
+}
+
+
+
+
+
+
+
+
+
+
+///////////////////////////////
+
+
+
+
 
 //GAMELOOP.h
 
@@ -653,8 +830,8 @@ void Menu(int ms_elapsed);
 
 //GAMELOOP.cpp
 
+// GLOBAL SHARED RESOURCE
 GameState gState;
-
 
 void OnStart()
 {
@@ -730,6 +907,7 @@ void ResetGhostsAndPlayer()
 	gState.player->stopped = true;
 	gState.player->enable_draw = true;
 
+	ResetAnimation();
 	gState.energizer_time = 0;
 	gState.wave_counter = 0;
 	gState.wave_time = 0;
@@ -789,6 +967,7 @@ void CheckWin()
 		gState.game_state = GAMEWIN;
 		gState.player->stopped = true;
 		gState.pause_time = 2000;
+		SetPulseFrequency(200);
 	}
 }
 
@@ -805,14 +984,13 @@ void MainLoop(int ms_elapsed)
 		return;
 	}
 
-	if (!gState.pellet_eaten)
-		PlayerMovement();
-	else gState.pellet_eaten = false;
+    PlayerMovement();
 
 	CheckPelletCollision();
 	CheckHighScore();
 	CheckWin();
 
+	AnimateUpdate(ms_elapsed);
 	DrawFrame();
 }
 
@@ -821,6 +999,7 @@ void GameStart(int ms_elasped)
 	gState.pause_time -= ms_elasped;
 	if (gState.pause_time <= 0) {
 		gState.game_state = MAINLOOP;
+		SetPulseFrequency(150);
 	}
 
 	DrawFrame();
@@ -841,6 +1020,7 @@ void GameLose(int ms_elapsed)
 			ResetGhostsAndPlayer();
 		}
 	}
+	AnimateUpdate(ms_elapsed);
 	DrawFrame();
 }
 void GameWin(int ms_elapsed)
@@ -853,6 +1033,7 @@ void GameWin(int ms_elapsed)
 		gState.pause_time = 2000;
 		gState.game_state = GAMESTART;
 	}
+	AnimateUpdate(ms_elapsed);
 	DrawFrame();
 }
 void SetupMenu()
@@ -860,9 +1041,12 @@ void SetupMenu()
 	gState.player->enable_draw = true;
 	gState.player->pos = { 6,17.5f };
 	gState.player->cur_dir = RIGHT;
+	SetPacManMenuFrame();
+	SetPulseFrequency(200);
 }
 void Menu(int ms_elapsed)
 {
+	PulseUpdate(ms_elapsed);
 	DrawMenuFrame();
 
 	if (sf::Keyboard::isKeyPressed(sf::Keyboard::Enter))
@@ -908,38 +1092,74 @@ void GameLoop(int ms_elapsed)
 
 int main()
 {
-	srand(time(NULL));
-	sf::RenderWindow window(sf::VideoMode(28.f * TSIZE * 2, 36.f * TSIZE * 2), "PACMAN");
-	window.setFramerateLimit(60);
-	window.setView(sf::View({ 0, 0, 28.f * TSIZE, 36.f * TSIZE }));
-	gState.window = &window;
-	
-	OnStart();
+    srand(time(NULL));
+    sf::RenderWindow window(sf::VideoMode(28.f * TSIZE * 2, 36.f * TSIZE * 2), "PACMAN");
+    window.setFramerateLimit(60);
+    window.setView(sf::View({ 0, 0, 28.f * TSIZE, 36.f * TSIZE }));
+    gState.window = &window;
+    
+    OnStart();
 
-	sf::Clock clock;
-	sf::Time elapsed;
+    sf::Clock clock;
+    sf::Time elapsed;
 
-	while (window.isOpen()) {
-		sf::Event event;
-		while (window.pollEvent(event)) {
-			switch (event.type) {
-			case sf::Event::Closed:
-				window.close();
-				break;
-			case sf::Event::KeyPressed:
-				switch (event.key.code)
-				{
-				case sf::Keyboard::Escape:
-					window.close();
-					break;
-				}
-			}
-		}
-		elapsed = clock.restart();
-		GameLoop(elapsed.asMilliseconds());
-	}
+    // Initialize the semaphore with an initial value of 0
+    sem_init(&semaphore, 0, 0);
 
-	OnQuit();
+    // Create a thread for player movement
+    pthread_t playerThread;
+    int threadErr = pthread_create(&playerThread, nullptr, PlayerMovementThread, nullptr);
+    if (threadErr != 0) {
+        std::cerr << "Failed to create player movement thread: " << std::endl;
+        return 1;
+    }
 
-	return 0;
+    while (window.isOpen()) {
+        sf::Event event;
+        while (window.pollEvent(event)) {
+            switch (event.type) {
+            case sf::Event::Closed:
+                window.close();
+                break;
+            case sf::Event::KeyPressed:
+                switch (event.key.code)
+                {
+                case sf::Keyboard::Escape:
+                    window.close();
+                    break;
+                }
+            }
+        }
+
+        // Lock the mutex before accessing shared resources
+        pthread_mutex_lock(&mutex);
+
+        Dir inputDir = NONE;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up))
+            inputDir = UP;
+        else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down))
+            inputDir = DOWN;
+        else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right))
+            inputDir = RIGHT;
+        else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left))
+            inputDir = LEFT;
+        
+        gState.inputDir = inputDir;
+
+        // Unlock the mutex after accessing shared resources
+        pthread_mutex_unlock(&mutex);
+
+        elapsed = clock.restart();
+        GameLoop(elapsed.asMilliseconds());
+    }
+
+    // Signal the semaphore to indicate thread termination
+    sem_post(&semaphore);
+
+    // Wait for the player thread to terminate
+    pthread_join(playerThread, nullptr);
+
+    OnQuit();
+
+    return 0;
 }
