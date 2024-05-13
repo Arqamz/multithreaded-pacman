@@ -24,7 +24,23 @@ enum Dir
 	LEFT,
 	RIGHT,
 };
-
+enum GhostType
+{
+	RED,
+	PINK,
+	BLUE,
+	ORANGE,
+};
+enum TargetState
+{
+	CHASE,
+	CORNER,
+	FRIGHTENED,
+	GOHOME,		// inital state to pathfind to the square above the door
+	HOMEBASE,	// indefinite state going up and down in home
+	LEAVEHOME,
+	ENTERHOME,
+};
 enum State
 {
 	MENU,
@@ -59,10 +75,28 @@ const float gohome_speed = 0.4;
 const float frightened_speed = 0.1;
 const float inhome_speed = 0.05;
 
+// seconds
+const int fright_time = 6;
+
+// scatter, chase repeating
+const int wave_times[8] = { 7,20,7,20,5,20,5,-1 };
+
 //
 // Global states
 //
+struct Ghost
+{
+	GhostType type;
+	sf::Vector2f pos;
+	Dir cur_dir;
+	TargetState target_state;
+	float move_speed = ghost_speed;
+	bool update_dir = false;
+	bool in_house = false;
+	bool enable_draw = true;
 
+	int dot_counter = 0;
+};
 struct Player
 {
 	sf::Vector2f pos;
@@ -94,12 +128,14 @@ struct GameState
 	
 	bool player_eat_ghost = false;
 	int ghosts_eaten_in_powerup = 0;
+	Ghost* recent_eaten = nullptr;
 
+	std::vector<Ghost*> ghosts;
 	Player* player;
 
-    Dir inputDir;
-
 	std::vector<std::string> board;
+
+    Dir inputDir;
 
 	// Timers in milliseconds
 	int energizer_time = 0;
@@ -147,6 +183,24 @@ inline sf::Vector2f operator * (sf::Vector2f vec, float num)
 {
 	return { vec.x * num, vec.y * num };
 }
+
+inline TargetState GetGlobalTarget()
+{
+	if (gState.wave_counter >= 7)
+		return CHASE;
+
+	return (gState.wave_counter % 2) ? CHASE : CORNER;
+}
+inline bool GhostRetreating()
+{
+	for (int i = 0; i < 4; i++) {
+		if (gState.ghosts[i]->target_state == GOHOME)
+			return true;
+	}
+
+	return false;
+}
+
 
 bool TileCollision(sf::Vector2f pos, bool home_tiles)
 {
@@ -200,14 +254,355 @@ void CenterObject(Dir dir, sf::Vector2f& pos)
 	}
 }
 
-// Player.h
+//Ghosts.h
 
+
+bool InMiddleTile(sf::Vector2f pos, sf::Vector2f prev, Dir dir);
+std::vector<Dir> GetAvailableSquares(sf::Vector2f pos, Dir dir, bool home_tiles);
+float Distance(int x, int y, int x1, int y1);
+Dir GetShortestDir(const std::vector<Dir>& squares, const Ghost& ghost, sf::Vector2f target);
+Dir GetOppositeTile(Ghost& ghost);
+
+sf::Vector2f BlinkyUpdate(Ghost& ghost);
+sf::Vector2f PinkyUpdate(Ghost& ghost);
+sf::Vector2f InkyUpdate(Ghost& ghost);
+sf::Vector2f ClydeUpdate(Ghost& ghost);
+
+bool PassedEntrence(Ghost& ghost);
+void HouseUpdate(Ghost& ghost);
+
+void UpdateDirection(std::vector<Dir> squares, Ghost& ghost);
+void UpdateGhosts();
+
+void SetAllGhostState(TargetState new_state);
+void SetGhostState(Ghost& ghost, TargetState new_state);
+
+const float starting_x[4] = { 14,14,12,16 };
+const Dir enter_dir[4] = { UP, UP, LEFT, RIGHT };
+const sf::Vector2f corners[4] = { {31,0},{0,0},{31,31}, {0,31} };
+const int dot_counters[4] = { 0,0,30,60 };
+
+const int global_dot_limit[4] = { 0,7,17,32 };
+
+
+// Ghosts.cpp
+
+
+bool InMiddleTile(sf::Vector2f pos, sf::Vector2f prev, Dir dir)
+{
+	if ((int)pos.x != (int)prev.x || (int)pos.y != (int)prev.y)
+		return false;
+	float x = pos.x - (int)pos.x;
+	float y = pos.y - (int)pos.y;
+
+	float px = prev.x - (int)prev.x;
+	float py = prev.y - (int)prev.y;
+
+	switch (dir)
+	{
+	case UP:
+	case DOWN:
+		return std::min(y, py) <= 0.5 && std::max(y, py) >= 0.5;
+		break;
+
+	case LEFT:
+	case RIGHT:
+		return std::min(x, px) <= 0.5 && std::max(x, px) >= 0.5;
+		break;
+	}
+	return false;
+}
+// this should be cached/hardcoded, but its performant enough
+std::vector<Dir> GetAvailableSquares(sf::Vector2f pos, Dir dir, bool home_tile)
+{
+	std::vector<Dir> squares;
+	// this is the reverse order of precedence that
+	// the original pacman game used
+	// up is picked before left if the distances are tied etc.
+	if (!TileCollision(pos + sf::Vector2f{ 0.9, 0 },home_tile ))
+		squares.push_back(RIGHT);
+	if (!TileCollision(pos + sf::Vector2f{ 0, 0.9 }, home_tile))
+		squares.push_back(DOWN);
+	if (!TileCollision(pos + sf::Vector2f{ -0.9, 0 }, home_tile))
+		squares.push_back(LEFT);
+	if (!TileCollision(pos + sf::Vector2f{ 0, -0.9 }, home_tile))
+		squares.push_back(UP);
+	for (int i = 0; i < squares.size(); i++) {
+		if (squares[i] == opposite_dir[dir])
+			squares.erase(squares.begin() + i);
+	}
+	return squares;
+}
+// returns squared distance
+float Distance(int x, int y, int x1, int y1)
+{
+	return ((x - x1) * (x - x1)) + ((y - y1) * (y - y1));
+}
+
+// the original game didnt use a pathfinding algorithm
+// simple distance comparisons are fine enough
+Dir GetShortestDir(const std::vector<Dir>& squares, const Ghost& ghost, sf::Vector2f target)
+{
+	int min_dist = 20000000;
+	Dir min_dir = NONE;
+	if (squares.size() == 0)
+		printf("EMPTY\n");
+
+	for (auto dir : squares) {
+		sf::Vector2f square = ghost.pos + dir_addition[dir];
+		float dir_dist = Distance(target.x, target.y, square.x, square.y);
+		if (dir_dist <= min_dist) {
+			min_dir = dir;
+			min_dist = dir_dist;
+		}
+	}
+
+	return min_dir;
+}
+sf::Vector2f BlinkyUpdate(Ghost& ghost)
+{
+	return gState.player->pos;
+}
+sf::Vector2f PinkyUpdate(Ghost& ghost)
+{
+	return gState.player->pos + dir_addition[gState.player->cur_dir] * 4;
+}
+sf::Vector2f InkyUpdate(Ghost& ghost)
+{
+	sf::Vector2f target = gState.player->pos + dir_addition[gState.player->cur_dir] * 2;
+	sf::Vector2f offset = gState.ghosts[RED]->pos - target;
+	target = target + offset * -1;
+	return target;
+}
+sf::Vector2f ClydeUpdate(Ghost& ghost)
+{
+	sf::Vector2f target = gState.player->pos;
+
+	// if clyde is 8 tiles away, target player, else target corner
+	if (Distance(ghost.pos.x, ghost.pos.y, gState.player->pos.x, gState.player->pos.y) < 64)
+		target = { 0,31 };
+	return target;
+}
+bool PassedEntrence(Ghost& ghost)
+{
+	float prev_x = ghost.pos.x - dir_addition[ghost.cur_dir].x * ghost.move_speed;
+
+	return FComp(ghost.pos.y, 11.5)
+		&& std::min(ghost.pos.x, prev_x) <= 14.1
+		&& std::max(ghost.pos.x, prev_x) >= 13.9;
+}
+void UpdateDirection(std::vector<Dir> squares, Ghost& ghost)
+{
+	sf::Vector2f target;
+	bool update_dir = false;
+	if (squares.size() == 1) {
+		ghost.cur_dir = squares.at(0);
+	}
+
+	switch (ghost.target_state)
+	{
+	case FRIGHTENED:
+		ghost.cur_dir = squares.at(rand() % (squares.size()));
+		break;
+	case GOHOME:
+		target = { 14,11.5 };
+		update_dir = true;
+		break;
+	case CHASE:
+		switch (ghost.type)
+		{
+		case RED:
+			target = BlinkyUpdate(ghost);
+			break;
+		case PINK:
+			target = PinkyUpdate(ghost);
+			break;
+		case BLUE:
+			target = InkyUpdate(ghost);
+			break;
+		case ORANGE:
+			target = ClydeUpdate(ghost);
+			break;
+		}
+		update_dir = true;
+		break;
+	case CORNER:
+		target = corners[ghost.type];
+		update_dir = true;
+		break;
+	}
+
+	if (update_dir)
+		ghost.cur_dir = GetShortestDir(squares, ghost, target);
+
+	CenterObject(ghost.cur_dir, ghost.pos);
+}
+// held together with duct tape
+// my waypoint system works on the assumption that movement is only
+// made in the center of tiles, in the house, movement is made off center,
+// which breaks it
+void HouseUpdate(Ghost& ghost)
+{
+	switch (ghost.target_state)
+	{
+	case ENTERHOME:
+		if (ghost.pos.y >= 15) {
+			ghost.cur_dir = enter_dir[ghost.type];
+			ghost.pos.y = 15;
+			if (FComp(ghost.pos.x, starting_x[ghost.type])
+				|| (ghost.cur_dir == LEFT && ghost.pos.x <= starting_x[ghost.type])
+				|| (ghost.cur_dir == RIGHT && ghost.pos.x >= starting_x[ghost.type])) {
+				ghost.target_state = HOMEBASE;
+				ghost.move_speed = inhome_speed;
+			}
+		}
+		break;
+	case LEAVEHOME:
+		if (FComp(ghost.pos.x, 14) || (ghost.cur_dir == LEFT && ghost.pos.x <= 14) || (ghost.cur_dir == RIGHT && ghost.pos.x >= 14)) {
+			ghost.cur_dir = UP;
+			ghost.pos.x = 14;
+			if (ghost.pos.y <= 11.5) {
+				ghost.move_speed = ghost_speed;
+				ghost.target_state = GetGlobalTarget();
+				ghost.pos.y = 11.5;
+				ghost.in_house = false;
+				ghost.cur_dir = LEFT;
+			}
+		}
+		else {
+			ghost.cur_dir = opposite_dir[enter_dir[ghost.type]];
+		}
+		break;
+	case HOMEBASE:
+		ghost.move_speed = inhome_speed;
+
+		// check timer if its time to leave
+		if (gState.using_global_counter) {
+			if (gState.global_dot_counter >= global_dot_limit[ghost.type])
+				ghost.target_state = LEAVEHOME;
+		}
+		else if (ghost.dot_counter >= dot_counters[ghost.type])
+			ghost.target_state = LEAVEHOME;
+
+		if (ghost.pos.y <= 14) {
+			ghost.pos.y = 14;
+			ghost.cur_dir = DOWN;
+		}
+		else if (ghost.pos.y >= 15) {
+			ghost.pos.y = 15;
+			ghost.cur_dir = UP;
+		}
+		break;
+	}
+}
+void UpdateGhosts()
+{
+	for (int i = 0; i < 4; i++) {
+		Ghost* ghost = gState.ghosts[i];
+		sf::Vector2f prev_pos = ghost->pos;
+
+		ghost->pos += dir_addition[ghost->cur_dir] * ghost->move_speed;
+		if (ghost->in_house) {
+			HouseUpdate(*ghost);
+		}
+		// if ghost pos is in the middle of the tile, didnt update last turn, and isnt in the tunnel, 
+		// do waypoint calculations, else do nothing
+		else if (!ghost->update_dir &&
+			InMiddleTile(ghost->pos, prev_pos, ghost->cur_dir) &&
+			!InTunnel(ghost->pos)) {
+			UpdateDirection(GetAvailableSquares(ghost->pos, ghost->cur_dir, false), *ghost);
+			ghost->update_dir = true;
+		}
+		else {
+			ghost->update_dir = false;
+		}
+
+		// blech, at least it terminates quickly
+		if (ghost->target_state == GOHOME &&
+			PassedEntrence(*ghost)) {
+			ghost->target_state = ENTERHOME;
+			ghost->in_house = true;
+			ghost->cur_dir = DOWN;
+			//ghost->move_speed = 0.02;
+			ghost->pos.x = 14;
+		}
+
+		// tunneling
+		if (ghost->pos.x < -1) {
+			ghost->pos.x += 29;
+		}
+		else if (ghost->pos.x >= 29) {
+			ghost->pos.x -= 29;
+		}
+	}
+}
+Dir GetOppositeTile(Ghost& ghost)
+{
+	// this will be the case 99% of times
+	if (!TileCollision(ghost.pos + dir_addition[opposite_dir[ghost.cur_dir]] * 0.9))
+		return opposite_dir[ghost.cur_dir];
+
+
+	auto squares = GetAvailableSquares(ghost.pos, ghost.cur_dir, false);
+	if (!squares.empty())
+		return squares.at(0);
+
+	// last case scenario, dont reverse
+	return ghost.cur_dir;
+
+}
+void SetAllGhostState(TargetState new_state)
+{
+	for (int i = 0; i < 4; i++) {
+		SetGhostState(*gState.ghosts[i], new_state);
+	}
+}
+
+void SetGhostState(Ghost& ghost, TargetState new_state)
+{
+	if (ghost.target_state == GOHOME)
+		return;
+	switch (new_state)
+	{
+	case LEAVEHOME:
+		if (ghost.in_house)
+			ghost.target_state = new_state;
+	case ENTERHOME:
+	case HOMEBASE:
+		break;
+	case FRIGHTENED:
+		if (!ghost.in_house) {
+			ghost.cur_dir = GetOppositeTile(ghost);
+			ghost.move_speed = ghost_fright;
+			ghost.target_state = new_state;
+		}
+		break;
+	case GOHOME:
+		if (!ghost.in_house) {
+			ghost.move_speed = gohome_speed;
+			ghost.target_state = new_state;
+		}
+		break;
+	default:
+		if (!ghost.in_house) {
+			// ghost reverses direction whenever changing states,
+			// except when coming from frightened
+			if (ghost.target_state != FRIGHTENED)
+				ghost.cur_dir = GetOppositeTile(ghost);
+			ghost.move_speed = ghost_speed;
+			ghost.target_state = new_state;
+		}
+		break;
+	}
+}
+
+
+// Player.h
 
 Dir GetCorrection(Dir pdir, sf::Vector2f ppos);
 void Cornering();
 void ResolveCollision();
 void PlayerMovement();
-
 Dir GetCorrection(Dir pdir, sf::Vector2f ppos)
 {
 	switch (pdir)
@@ -311,7 +706,6 @@ void PlayerMovement()
 }
 
 //RENDER.H
-
 struct Textures
 {
 	sf::Texture pellets;
@@ -375,7 +769,6 @@ void ClearText();
 void MakeText(std::string string, int x, int y, sf::Color f_color);
 
 // ANIMATE.H
-
 struct Animation
 {
 	int pacman_frame=0;
@@ -402,6 +795,7 @@ void StartPacManDeath();
 void ResetAnimation();
 void SetPacManMenuFrame();
 
+sf::IntRect GetGhostFrame(GhostType type, TargetState state, Dir dir);
 sf::IntRect GetPacManFrame(Dir dir);
 
 void PulseUpdate(int ms_elapsed);
@@ -410,9 +804,46 @@ void SetPulseFrequency(int ms);
 
 // ANIMATE.cpp
 
-
 static Animation animate;
 
+sf::IntRect GetGhostFrame(GhostType type, TargetState state, Dir dir)
+{
+	sf::IntRect ghost = { 0,128,32,32 };
+
+	int offset = 0;
+	if (state != FRIGHTENED) {
+		switch (dir)
+		{
+		case UP:
+			offset = 128;
+			break;
+		case DOWN:
+			offset = 128 + 64;
+			break;
+		case LEFT:
+			offset = 64;
+			break;
+		}
+	}
+	
+	if (state == FRIGHTENED) {
+		ghost.left = 256;
+		if (animate.fright_flash)
+			ghost.left += 64;
+	}
+	else if (state == GOHOME || state == ENTERHOME) {
+		ghost.left = 256 + (offset/2);
+		ghost.top = 128 + 32;
+	}
+	else {
+		ghost.top += 32 * type;
+		ghost.left = offset;
+	}
+	if(state != GOHOME && state != ENTERHOME)
+		ghost.left += animate.ghost_frame_2 * 32;
+
+	return ghost;
+}
 void AnimateUpdate(int ms_elapsed)
 {
 	PulseUpdate(ms_elapsed);
@@ -521,7 +952,6 @@ bool IsPulse()
 	return animate.pulse;
 }
 
-
 // RENDER.cpp
 static RenderItems RItems;
 static Textures RTextures;
@@ -538,6 +968,13 @@ void InitRender()
 	RItems.wall_map.setScale({ 0.5,0.5 });
 
 	InitPellets();
+
+	for (int i = 0; i < 4; i++)
+	{
+		RItems.ghosts[i].setTexture(RTextures.sprites);
+		RItems.ghosts[i].setScale({ 0.5,0.5 });
+		RItems.ghosts[i].setOrigin({ 16,16 });
+	}
 
 	RItems.player.setTexture(RTextures.sprites);
 	RItems.player.setScale({ 0.5,0.5 });
@@ -700,6 +1137,13 @@ void DrawFrame()
 	gState.window->draw(RItems.text_va, &RTextures.font);
 	gState.window->draw(RItems.pellet_va, &RTextures.pellets);
 	
+	for (int i = 0; i < 4; i++) {
+		if (!gState.ghosts[i]->enable_draw)
+			continue;
+		RItems.ghosts[i].setPosition(gState.ghosts[i]->pos.x * TSIZE, gState.ghosts[i]->pos.y * TSIZE + YOFFSET);
+		RItems.ghosts[i].setTextureRect(GetGhostFrame(gState.ghosts[i]->type, gState.ghosts[i]->target_state, gState.ghosts[i]->cur_dir));
+		gState.window->draw(RItems.ghosts[i]);
+	}
 
 	if (gState.player->enable_draw) {
 		RItems.player.setPosition(gState.player->pos.x * TSIZE, gState.player->pos.y * TSIZE + YOFFSET);
@@ -730,6 +1174,13 @@ void DrawMenuFrame()
 	MakeText("-CLYDE", 9, 17, { 248,187,85 });
 	MakeText("-PACMAN", 9, 20, { 255,255,0 });
 
+
+
+	for (int i = 0; i < 4; i++) {
+		RItems.ghosts[i].setPosition(gState.ghosts[i]->pos.x * TSIZE, gState.ghosts[i]->pos.y * TSIZE + YOFFSET);
+		RItems.ghosts[i].setTextureRect(GetGhostFrame(gState.ghosts[i]->type, gState.ghosts[i]->target_state, gState.ghosts[i]->cur_dir));
+		gState.window->draw(RItems.ghosts[i]);
+	}
 	RItems.player.setPosition(gState.player->pos.x * TSIZE, gState.player->pos.y * TSIZE + YOFFSET);
 	RItems.player.setTextureRect(GetPacManFrame(gState.player->cur_dir));
 
@@ -773,7 +1224,7 @@ void* PlayerMovementThread(void* arg) {
         pthread_mutex_unlock(&mutex);
 
         // // Sleep for a short duration to control thread execution speed
-        sf::sleep(sf::milliseconds(100));
+        sf::sleep(sf::milliseconds(10));
 
         // // Check if the semaphore is signaled (indicating thread termination)
         int semValue;
@@ -785,23 +1236,9 @@ void* PlayerMovementThread(void* arg) {
     return nullptr;
 }
 
-
-
-
-
-
-
-
-
-
 ///////////////////////////////
 
-
-
-
-
 //GAMELOOP.h
-
 
 void OnStart();
 void OnQuit();
@@ -815,6 +1252,9 @@ void SetupMenu();
 
 void IncrementGhostHouse();
 void CheckPelletCollision();
+void CheckGhostCollision();
+void UpdateWave(int ms_elapsed);
+void UpdateEnergizerTime(int ms_elasped);
 void CheckWin();
 
 void CheckHighScore();
@@ -891,16 +1331,69 @@ void Init()
 	pl->stopped = true;
 	gState.player = pl;
 
+	// Ghosts init
+
+	Ghost* temp = new Ghost();
+	temp->type = RED;
+	gState.ghosts.push_back(temp);
+
+	temp = new Ghost();
+	temp->type = PINK;
+	gState.ghosts.push_back(temp);
+
+	temp = new Ghost();
+	temp->type = BLUE;
+	gState.ghosts.push_back(temp);
+
+	temp = new Ghost();
+	temp->type = ORANGE;
+	gState.ghosts.push_back(temp);
+
 	InitBoard();
 	InitRender();
 	ResetGhostsAndPlayer();
-	
+		
 	SetupMenu();
 	gState.game_state = MENU;
 	gState.pause_time = 2000;
 }
 void ResetGhostsAndPlayer()
 {
+	Ghost* temp = gState.ghosts[0];
+	temp->pos = { 14, 11.5 };
+	temp->cur_dir = LEFT;
+	temp->target_state = CORNER;
+	temp->in_house = false;
+	temp->move_speed = ghost_speed;
+	//temp->dot_counter = 0;
+	temp->enable_draw = true;
+
+	temp = gState.ghosts[1];
+	temp->pos = { 14, 14.5 };
+	temp->cur_dir = UP;
+	temp->target_state = HOMEBASE;
+	temp->in_house = true;
+	temp->move_speed = inhome_speed;
+	//temp->dot_counter = 0;
+	temp->enable_draw = true;
+
+	temp = gState.ghosts[2];
+	temp->pos = { 12, 14.5 };
+	temp->cur_dir = DOWN;
+	temp->target_state = HOMEBASE;
+	temp->in_house = true;
+	temp->move_speed = inhome_speed;
+	//temp->dot_counter = 0;
+	temp->enable_draw = true;
+
+	temp = gState.ghosts[3];
+	temp->pos = { 16, 14.5 };
+	temp->cur_dir = DOWN;
+	temp->target_state = HOMEBASE;
+	temp->in_house = true;
+	temp->move_speed = inhome_speed;
+	//temp->dot_counter = 0;
+	temp->enable_draw = true;
 
 	gState.player->cur_dir = UP;
 	gState.player->pos = { 14,23.5 };
@@ -928,34 +1421,118 @@ void ResetBoard()
 
 	gState.first_life = true;
 	gState.using_global_counter = false;
+	for (int i = 0; i < 4; i++)
+		gState.ghosts[i]->dot_counter = 0;
 }
 
+void IncrementGhostHouse()
+{
+	Ghost* first_ghost = nullptr;
+	// using global counter, increment it
+	if (gState.using_global_counter) {
+		gState.global_dot_counter++;
+	}
+	for (int i = 0; i < 4; i++) {
+		if (gState.ghosts[i]->target_state == HOMEBASE) {
+			first_ghost = gState.ghosts[i];
+			break;
+		}
+	}
+	if (first_ghost == nullptr) {
+		// no more ghosts in house, switch back to local counters
+		if (gState.using_global_counter) {
+			gState.using_global_counter = false;
+		}
+	}
+	// if not using global and ghost is in house, use local counter
+	else if(!gState.using_global_counter) {
+		first_ghost->dot_counter++;
+	}
+}
 void CheckPelletCollision()
 {
 	char tile = GetTile(gState.player->pos.x, gState.player->pos.y);
 	bool collided = false;
 	if (tile == '.') {
 		collided = true;
+		// play sound
 		gState.game_score += 10;
 	}
 	else if (tile == 'o') {
 		collided = true;
 		gState.game_score += 50;
-		// gState.energizer_time = fright_time*1000;
+		gState.energizer_time = fright_time*1000;
 
 		gState.ghosts_eaten_in_powerup = 0;
 
+		SetAllGhostState(FRIGHTENED);
 	}
 
 	if (collided) {
 		RemovePellet(gState.player->pos.x, gState.player->pos.y);
 		SetTile(gState.player->pos.x, gState.player->pos.y, ' ');
+		IncrementGhostHouse();
 		gState.pellet_eaten = true;
 		gState.pellets_left--;
 	}
 }
+void CheckGhostCollision()
+{
+	int px = (int)gState.player->pos.x;
+	int py = (int)gState.player->pos.y;
 
+	for (int i = 0; i < 4; i++) {
+		if ((int)gState.ghosts[i]->pos.x == px && (int)gState.ghosts[i]->pos.y == py) {
+			if (gState.ghosts[i]->target_state == FRIGHTENED) {
+				SetGhostState(*gState.ghosts[i], GOHOME);
+				gState.recent_eaten = gState.ghosts[i];
+				gState.ghosts_eaten_in_powerup++;
+				gState.game_score += (pow(2,gState.ghosts_eaten_in_powerup) * 100);
+				
+				gState.player_eat_ghost = true;
+				gState.pause_time = 500;
 
+				gState.ghosts[i]->enable_draw = false;
+				gState.player->enable_draw = false;
+
+			}
+			else if (gState.ghosts[i]->target_state != GOHOME) {
+				gState.game_state = GAMELOSE;
+				gState.pause_time = 2000;
+				gState.player_lives -= 1;
+				gState.first_life = false;
+				StartPacManDeath();
+				printf("RESET\n");
+			}
+		}
+	}
+}
+void UpdateWave(int ms_elapsed)
+{
+	// indefinte chase mode
+	if (gState.wave_counter >= 7)
+		return;
+
+	gState.wave_time += ms_elapsed;
+	if (gState.wave_time / 1000 >= wave_times[gState.wave_counter]) {
+		gState.wave_counter++;
+		printf("New wave\n");
+		if(gState.energizer_time <= 0)
+			SetAllGhostState(GetGlobalTarget());
+		gState.wave_time = 0;
+	}
+
+}
+void UpdateEnergizerTime(int ms_elasped)
+{
+	if (gState.energizer_time <= 0)
+		return;
+
+	gState.energizer_time -= ms_elasped;
+	if (gState.energizer_time <= 0) {
+		SetAllGhostState(GetGlobalTarget());
+	}
+}
 void CheckHighScore()
 {
 	if (gState.game_score > gState.high_score)
@@ -965,17 +1542,20 @@ void CheckWin()
 {
 	if (gState.pellets_left <= 0) {
 		gState.game_state = GAMEWIN;
+		for (int i = 0; i < 4; i++) {
+			gState.ghosts[i]->enable_draw = false;
+		}
 		gState.player->stopped = true;
 		gState.pause_time = 2000;
 		SetPulseFrequency(200);
 	}
 }
-
 void MainLoop(int ms_elapsed)
 {
 	if (gState.player_eat_ghost) {
 		gState.pause_time -= ms_elapsed;
 		if (gState.pause_time < 0) {
+			gState.recent_eaten->enable_draw = true;
 			gState.player->enable_draw = true;
 			gState.player_eat_ghost = false;
 		}
@@ -984,16 +1564,27 @@ void MainLoop(int ms_elapsed)
 		return;
 	}
 
-    PlayerMovement();
+	// pacman doesnt move for one frame if he eats a pellet
+	// from the original game
+	// if (!gState.pellet_eaten)
+	// 	PlayerMovement();
+	// else gState.pellet_eaten = false;
 
+    if(gState.pellet_eaten)
+        gState.pellet_eaten = false;
+
+	// check collision first so less funny stuff
+	CheckGhostCollision();
 	CheckPelletCollision();
+	UpdateGhosts();
+	UpdateWave(ms_elapsed);
+	UpdateEnergizerTime(ms_elapsed);
 	CheckHighScore();
 	CheckWin();
 
 	AnimateUpdate(ms_elapsed);
 	DrawFrame();
 }
-
 void GameStart(int ms_elasped)
 {
 	gState.pause_time -= ms_elasped;
@@ -1011,6 +1602,8 @@ void GameLose(int ms_elapsed)
 		if (gState.player_lives < 0) {
 			gState.game_state = GAMEOVER;
 			gState.pause_time = 5000;
+			for (int i = 0; i < 4; i++)
+				gState.ghosts[i]->enable_draw = false;
 			gState.player->enable_draw = false;
 		}
 		else {
@@ -1038,6 +1631,13 @@ void GameWin(int ms_elapsed)
 }
 void SetupMenu()
 {
+	for (int i = 0; i < 4; i++) {
+		gState.ghosts[i]->enable_draw = true;
+		gState.ghosts[i]->pos = { 6,5.5f + i * 3.f };
+		gState.ghosts[i]->cur_dir = RIGHT;
+		gState.ghosts[i]->target_state = CHASE;
+		gState.ghosts[i]->in_house = false;
+	}
 	gState.player->enable_draw = true;
 	gState.player->pos = { 6,17.5f };
 	gState.player->cur_dir = RIGHT;
@@ -1079,6 +1679,7 @@ void GameLoop(int ms_elapsed)
 			SetupMenu();
 			gState.game_state = MENU;
 		}
+			//gState.game_state = MENU;
 		DrawFrame();
 		break;
 	case GAMEWIN:
