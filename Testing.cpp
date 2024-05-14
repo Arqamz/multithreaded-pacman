@@ -136,6 +136,7 @@ struct GameState
 	std::vector<std::string> board;
 
     Dir inputDir;
+    bool sem_b_input;
 
 	// Timers in milliseconds
 	int energizer_time = 0;
@@ -1069,10 +1070,14 @@ void DrawGameUI()
 	
 	MakeText("High Score", 9, 0, { 255,255,255 });
 	
-	if (gState.game_state == GAMESTART)
+	if (gState.game_state == GAMESTART){
+        gState.sem_b_input = false;
 		MakeText("Ready!", 11, 20, { 255,255,00 });
-	else if (gState.game_state == GAMEOVER)
+    }
+	else if (gState.game_state == GAMEOVER){
+        gState.sem_b_input = false;
 		MakeText("GAME  OVER", 9, 20, { 255,0,00 });
+    }
 
 	std::string score  = std::to_string(gState.game_score);
 	if (score.size() == 1)
@@ -1218,7 +1223,9 @@ void* PlayerMovementThread(void* arg) {
         pthread_mutex_lock(&mutex);
 
         // Player movement logic
-        PlayerMovement();  
+        if(gState.sem_b_input){
+            PlayerMovement();  
+        }
 
         // Unlock the mutex after accessing shared resources
         pthread_mutex_unlock(&mutex);
@@ -1356,6 +1363,8 @@ void Init()
 	SetupMenu();
 	gState.game_state = MENU;
 	gState.pause_time = 2000;
+
+    gState.sem_b_input = false;
 }
 void ResetGhostsAndPlayer()
 {
@@ -1500,6 +1509,7 @@ void CheckGhostCollision()
 				gState.game_state = GAMELOSE;
 				gState.pause_time = 2000;
 				gState.player_lives -= 1;
+                gState.sem_b_input = false;
 				gState.first_life = false;
 				StartPacManDeath();
 				printf("RESET\n");
@@ -1545,6 +1555,7 @@ void CheckWin()
 		for (int i = 0; i < 4; i++) {
 			gState.ghosts[i]->enable_draw = false;
 		}
+        gState.sem_b_input = false;
 		gState.player->stopped = true;
 		gState.pause_time = 2000;
 		SetPulseFrequency(200);
@@ -1576,7 +1587,9 @@ void MainLoop(int ms_elapsed)
 	// check collision first so less funny stuff
 	CheckGhostCollision();
 	CheckPelletCollision();
-	UpdateGhosts();
+	
+    // MAKE THREAD FUNCTION HERE
+    UpdateGhosts();
 	UpdateWave(ms_elapsed);
 	UpdateEnergizerTime(ms_elapsed);
 	CheckHighScore();
@@ -1587,6 +1600,7 @@ void MainLoop(int ms_elapsed)
 }
 void GameStart(int ms_elasped)
 {
+    gState.sem_b_input = false;
 	gState.pause_time -= ms_elasped;
 	if (gState.pause_time <= 0) {
 		gState.game_state = MAINLOOP;
@@ -1597,6 +1611,7 @@ void GameStart(int ms_elasped)
 }
 void GameLose(int ms_elapsed)
 {
+    gState.sem_b_input = false;
 	gState.pause_time -= ms_elapsed;
 	if (gState.pause_time <= 0) {
 		if (gState.player_lives < 0) {
@@ -1618,6 +1633,7 @@ void GameLose(int ms_elapsed)
 }
 void GameWin(int ms_elapsed)
 {
+    gState.sem_b_input = false;
 	gState.pause_time -= ms_elapsed;
 	if (gState.pause_time <= 0) {
 		ResetPellets();
@@ -1631,6 +1647,7 @@ void GameWin(int ms_elapsed)
 }
 void SetupMenu()
 {
+    gState.sem_b_input = false;
 	for (int i = 0; i < 4; i++) {
 		gState.ghosts[i]->enable_draw = true;
 		gState.ghosts[i]->pos = { 6,5.5f + i * 3.f };
@@ -1646,6 +1663,7 @@ void SetupMenu()
 }
 void Menu(int ms_elapsed)
 {
+    gState.sem_b_input = false;
 	PulseUpdate(ms_elapsed);
 	DrawMenuFrame();
 
@@ -1665,6 +1683,7 @@ void GameLoop(int ms_elapsed)
 	switch (gState.game_state)
 	{
 	case MAINLOOP:
+        gState.sem_b_input = true;
 		MainLoop(ms_elapsed);
 		break;
 	case GAMESTART:
@@ -1679,7 +1698,6 @@ void GameLoop(int ms_elapsed)
 			SetupMenu();
 			gState.game_state = MENU;
 		}
-			//gState.game_state = MENU;
 		DrawFrame();
 		break;
 	case GAMEWIN:
