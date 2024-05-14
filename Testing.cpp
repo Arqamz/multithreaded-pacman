@@ -121,6 +121,7 @@ struct GameState
 	int wave_counter = 0;
 
 	bool pellet_eaten = false;
+	bool powerPelletMode = false;
 
 	bool first_life = true;
 	bool using_global_counter = false;
@@ -138,7 +139,6 @@ struct GameState
     Dir inputDir;
     bool sem_b_input;
 
-	// Timers in milliseconds
 	int energizer_time = 0;
 	int pause_time = 0;
 	int wave_time = 0;
@@ -273,7 +273,7 @@ bool PassedEntrence(Ghost& ghost);
 void HouseUpdate(Ghost& ghost);
 
 void UpdateDirection(std::vector<Dir> squares, Ghost& ghost);
-void UpdateGhosts();
+void UpdateGhosts(int ghostNum);
 
 void SetAllGhostState(TargetState new_state);
 void SetGhostState(Ghost& ghost, TargetState new_state);
@@ -496,45 +496,44 @@ void HouseUpdate(Ghost& ghost)
 		break;
 	}
 }
-void UpdateGhosts()
+void UpdateGhosts(int ghostNum)
 {
-	for (int i = 0; i < 4; i++) {
-		Ghost* ghost = gState.ghosts[i];
-		sf::Vector2f prev_pos = ghost->pos;
+	//printf("Ghost %d is being updated\n", ghostNum);
+	Ghost* ghost = gState.ghosts[ghostNum];
+	sf::Vector2f prev_pos = ghost->pos;
 
-		ghost->pos += dir_addition[ghost->cur_dir] * ghost->move_speed;
-		if (ghost->in_house) {
-			HouseUpdate(*ghost);
-		}
-		// if ghost pos is in the middle of the tile, didnt update last turn, and isnt in the tunnel, 
-		// do waypoint calculations, else do nothing
-		else if (!ghost->update_dir &&
-			InMiddleTile(ghost->pos, prev_pos, ghost->cur_dir) &&
-			!InTunnel(ghost->pos)) {
-			UpdateDirection(GetAvailableSquares(ghost->pos, ghost->cur_dir, false), *ghost);
-			ghost->update_dir = true;
-		}
-		else {
-			ghost->update_dir = false;
-		}
+	ghost->pos += dir_addition[ghost->cur_dir] * ghost->move_speed;
+	if (ghost->in_house) {
+		HouseUpdate(*ghost);
+	}
+	// if ghost pos is in the middle of the tile, didnt update last turn, and isnt in the tunnel, 
+	// do waypoint calculations, else do nothing
+	else if (!ghost->update_dir &&
+		InMiddleTile(ghost->pos, prev_pos, ghost->cur_dir) &&
+		!InTunnel(ghost->pos)) {
+		UpdateDirection(GetAvailableSquares(ghost->pos, ghost->cur_dir, false), *ghost);
+		ghost->update_dir = true;
+	}
+	else {
+		ghost->update_dir = false;
+	}
 
-		// blech, at least it terminates quickly
-		if (ghost->target_state == GOHOME &&
-			PassedEntrence(*ghost)) {
-			ghost->target_state = ENTERHOME;
-			ghost->in_house = true;
-			ghost->cur_dir = DOWN;
-			//ghost->move_speed = 0.02;
-			ghost->pos.x = 14;
-		}
+	// blech, at least it terminates quickly
+	if (ghost->target_state == GOHOME &&
+		PassedEntrence(*ghost)) {
+		ghost->target_state = ENTERHOME;
+		ghost->in_house = true;
+		ghost->cur_dir = DOWN;
+		//ghost->move_speed = 0.02;
+		ghost->pos.x = 14;
+	}
 
-		// tunneling
-		if (ghost->pos.x < -1) {
-			ghost->pos.x += 29;
-		}
-		else if (ghost->pos.x >= 29) {
-			ghost->pos.x -= 29;
-		}
+	// tunneling
+	if (ghost->pos.x < -1) {
+		ghost->pos.x += 29;
+	}
+	else if (ghost->pos.x >= 29) {
+		ghost->pos.x -= 29;
 	}
 }
 Dir GetOppositeTile(Ghost& ghost)
@@ -762,10 +761,6 @@ void ResetPPelletFlash();
 
 void DrawMenuFrame();
 
-// Text drawing
-// Ive tried using SFML's text class in the past but it ends up
-// looking blurry at low resolution, this is a simple way of drawing text
-// using the original lettering
 void ClearText();
 void MakeText(std::string string, int x, int y, sf::Color f_color);
 
@@ -784,7 +779,6 @@ struct Animation
 
 	bool death_animation = false;
 
-	// genertic pulse for win condition and energizer
 	int pulse = true;
 	int pulse_timer = 0;
 
@@ -880,7 +874,6 @@ void AnimateUpdate(int ms_elapsed)
 		animate.ghost_timer = 0;
 	}
 
-	// start flashing with 2 seconds to go
 	if (gState.energizer_time > 0 && gState.energizer_time < 2000) {
 		animate.energrizer_timer += ms_elapsed;
 		if (animate.energrizer_timer > 200) {
@@ -1095,6 +1088,7 @@ void DrawGameUI()
 		gState.window->draw(RItems.player);
 	}
 }
+
 void FlashPPellets()
 {
 	sf::Uint8 new_alpha = (RItems.pow_is_off) ? 255 : 1;
@@ -1102,7 +1096,6 @@ void FlashPPellets()
 	for (int i = 0; i < 4; i++) {
 		int index = RItems.pow_indicies[i];
 		sf::Vertex* vert = &RItems.pellet_va[index];
-		// I am using alpha 0 to hide pellets, so for flashing, Ill just use alpha 1
 		if (vert->color.a == 0)
 			continue;
 		vert[0].color.a = new_alpha;
@@ -1111,11 +1104,13 @@ void FlashPPellets()
 		vert[3].color.a = new_alpha;
 	}
 }
+
 void ResetPPelletFlash()
 {
 	RItems.pow_is_off = true;
 	FlashPPellets();
 }
+
 void DrawFrame()
 {
 	gState.window->clear(sf::Color::Black);
@@ -1179,13 +1174,12 @@ void DrawMenuFrame()
 	MakeText("-CLYDE", 9, 17, { 248,187,85 });
 	MakeText("-PACMAN", 9, 20, { 255,255,0 });
 
-
-
 	for (int i = 0; i < 4; i++) {
 		RItems.ghosts[i].setPosition(gState.ghosts[i]->pos.x * TSIZE, gState.ghosts[i]->pos.y * TSIZE + YOFFSET);
 		RItems.ghosts[i].setTextureRect(GetGhostFrame(gState.ghosts[i]->type, gState.ghosts[i]->target_state, gState.ghosts[i]->cur_dir));
 		gState.window->draw(RItems.ghosts[i]);
 	}
+
 	RItems.player.setPosition(gState.player->pos.x * TSIZE, gState.player->pos.y * TSIZE + YOFFSET);
 	RItems.player.setTextureRect(GetPacManFrame(gState.player->cur_dir));
 
@@ -1195,10 +1189,12 @@ void DrawMenuFrame()
 
 	gState.window->display();
 }
+
 void ClearText()
 {
 	RItems.text_va.clear();
 }
+
 void MakeText(std::string string, int x, int y, sf::Color color)
 {
 	for (int i = 0; i < string.size(); i++) {
@@ -1213,27 +1209,30 @@ void MakeText(std::string string, int x, int y, sf::Color color)
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
+pthread_mutex_t ghost_mutexes[4];
+
 // Semaphore to signal thread termination
 sem_t semaphore;
 
+// Move Ghost semaphore
+sem_t ghostSemaphores[4];
+// Semaphore to terminate ghosts
+sem_t ghostTerminateSemaphore[4];
+
+// sem_t ghostSemaphores[4];
 
 void* PlayerMovementThread(void* arg) {
     while (true) {
-        // Lock the mutex to access shared resources
         pthread_mutex_lock(&mutex);
 
-        // Player movement logic
         if(gState.sem_b_input){
             PlayerMovement();  
         }
 
-        // Unlock the mutex after accessing shared resources
         pthread_mutex_unlock(&mutex);
 
-        // // Sleep for a short duration to control thread execution speed
         sf::sleep(sf::milliseconds(10));
 
-        // // Check if the semaphore is signaled (indicating thread termination)
         int semValue;
         sem_getvalue(&semaphore, &semValue);
         if (semValue == 1) {
@@ -1242,6 +1241,214 @@ void* PlayerMovementThread(void* arg) {
     }
     return nullptr;
 }
+
+void* GhostMovementThread(void* arg) {
+    int ghostNum = *static_cast<int*>(arg);
+    delete static_cast<int*>(arg);
+    
+    printf("Updating ghost %d in thread\n", ghostNum);
+
+    // Wait for the semaphore to be signaled before starting
+	sem_wait(&ghostSemaphores[ghostNum]);
+
+    while (true) {
+        pthread_mutex_lock(&ghost_mutexes[ghostNum]);
+        
+        UpdateGhosts(ghostNum);
+
+        pthread_mutex_unlock(&ghost_mutexes[ghostNum]);
+
+        sf::sleep(sf::milliseconds(20));
+
+        // Check if the terminate semaphore has been signaled
+        int semValue;
+        sem_getvalue(&ghostTerminateSemaphore[ghostNum], &semValue);
+        if (semValue == 1) {
+            // If semaphore was signaled, exit the loop and terminate the thread
+            printf("Thread %d terminating\n", ghostNum);
+            pthread_exit(nullptr);
+        }
+    }
+
+    return nullptr;
+}
+
+void InitGhostSemaphores() {
+    // Reinitialize ghostSemaphores with initial value 0
+    for (int i = 0; i < 4; ++i) {
+        sem_init(&ghostSemaphores[i], 0, 0);
+    }
+    // Reinitialize ghostTerminateSemaphore with initial value 0
+    for (int i = 0; i < 4; ++i) {
+        sem_init(&ghostTerminateSemaphore[i], 0, 0);
+    }
+}
+
+void InitGhostThreads() {
+    printf("We got here\n");
+    for (int i = 0; i < 4; i++) {
+        sem_init(&ghostSemaphores[i], 0, 0);
+        pthread_mutex_init(&ghost_mutexes[i], nullptr);
+        pthread_t ghostThread;
+        
+        int* ghostNum = new int(i);
+        
+        int threadErr = pthread_create(&ghostThread, nullptr, GhostMovementThread, static_cast<void*>(ghostNum));
+        if (threadErr!= 0) {
+            std::cerr << "Failed to create ghost movement thread: " << std::endl;
+            return;
+        }
+        printf("Ghost thread %d created\n", i);
+    }
+}
+
+// Function for threading CheckPelletCollision
+void* CheckPelletCollisionThread(void* arg) {
+    while (true) {
+        // Lock mutex before accessing shared state
+        pthread_mutex_lock(&mutex);
+        
+        CheckPelletCollision();
+        
+        // Unlock mutex after accessing shared state
+        pthread_mutex_unlock(&mutex);
+        
+        // Sleep for a short duration to prevent busy-waiting
+        sf::sleep(sf::milliseconds(10));
+    }
+    return nullptr;
+}
+
+// Function for threading CheckGhostCollision
+void* CheckGhostCollisionThread(void* arg) {
+    while (true) {
+        pthread_mutex_lock(&mutex);
+        
+        CheckGhostCollision();
+        
+        pthread_mutex_unlock(&mutex);
+        
+        sf::sleep(sf::milliseconds(10));
+    }
+    return nullptr;
+}
+
+// Function for threading UpdateWave
+void* UpdateWaveThread(void* arg) {
+    while (true) {
+        pthread_mutex_lock(&mutex);
+        
+        UpdateWave(*static_cast<int*>(arg));
+        
+        pthread_mutex_unlock(&mutex);
+        
+        sf::sleep(sf::milliseconds(10));
+    }
+    return nullptr;
+}
+
+// Function for threading UpdateEnergizerTime
+void* UpdateEnergizerTimeThread(void* arg) {
+    while (true) {
+        pthread_mutex_lock(&mutex);
+        
+        UpdateEnergizerTime(*static_cast<int*>(arg));
+        
+        pthread_mutex_unlock(&mutex);
+        
+        sf::sleep(sf::milliseconds(10));
+    }
+    return nullptr;
+}
+
+// Function for threading CheckHighScore
+void* CheckHighScoreThread(void* arg) {
+    while (true) {
+        pthread_mutex_lock(&mutex);
+        
+        CheckHighScore();
+        
+        pthread_mutex_unlock(&mutex);
+        
+        sf::sleep(sf::milliseconds(10));
+    }
+    return nullptr;
+}
+
+// Function for threading CheckWin
+void* CheckWinThread(void* arg) {
+    while (true) {
+        pthread_mutex_lock(&mutex);
+        
+        CheckWin();
+        
+        pthread_mutex_unlock(&mutex);
+        
+        sf::sleep(sf::milliseconds(10));
+    }
+    return nullptr;
+}
+
+// Function for initializing and starting the Pellet Collision thread
+void InitPelletCollisionThread() {
+    pthread_t pelletCollisionThread;
+    int threadErr = pthread_create(&pelletCollisionThread, nullptr, CheckPelletCollisionThread, nullptr);
+    if (threadErr != 0) {
+        std::cerr << "Failed to create CheckPelletCollision thread: " << std::endl;
+        return;
+    }
+}
+
+// Function for initializing and starting the Ghost Collision thread
+void InitGhostCollisionThread() {
+    pthread_t ghostCollisionThread;
+    int threadErr = pthread_create(&ghostCollisionThread, nullptr, CheckGhostCollisionThread, nullptr);
+    if (threadErr != 0) {
+        std::cerr << "Failed to create CheckGhostCollision thread: " << std::endl;
+        return;
+    }
+}
+
+// Function for initializing and starting the Update Wave thread
+void InitUpdateWaveThread(int ms_elapsed) {
+    pthread_t updateWaveThread;
+    int threadErr = pthread_create(&updateWaveThread, nullptr, UpdateWaveThread, static_cast<void*>(&ms_elapsed));
+    if (threadErr != 0) {
+        std::cerr << "Failed to create UpdateWave thread: " << std::endl;
+        return;
+    }
+}
+
+// Function for initializing and starting the Update Energizer Time thread
+void InitUpdateEnergizerTimeThread(int ms_elapsed) {
+    pthread_t updateEnergizerTimeThread;
+    int threadErr = pthread_create(&updateEnergizerTimeThread, nullptr, UpdateEnergizerTimeThread, static_cast<void*>(&ms_elapsed));
+    if (threadErr != 0) {
+        std::cerr << "Failed to create UpdateEnergizerTime thread: " << std::endl;
+        return;
+    }
+}
+
+// Function for initializing and starting the Check High Score thread
+void InitCheckHighScoreThread() {
+    pthread_t checkHighScoreThread;
+    int threadErr = pthread_create(&checkHighScoreThread, nullptr, CheckHighScoreThread, nullptr);
+    if (threadErr != 0) {
+        std::cerr << "Failed to create CheckHighScore thread: " << std::endl;
+        return;
+    }
+}
+
+// Function for initializing and starting the Check Win thread
+void InitCheckWinThread() {
+    pthread_t checkWinThread;
+    int threadErr = pthread_create(&checkWinThread, nullptr, CheckWinThread, nullptr);
+    if (threadErr != 0) {
+        std::cerr << "Failed to create CheckWin thread: " << std::endl;
+        return;
+    }
+}
+
 
 ///////////////////////////////
 
@@ -1420,6 +1627,8 @@ void ResetGhostsAndPlayer()
 		gState.using_global_counter = true;
 	
 	gState.global_dot_counter = 0;
+	InitGhostSemaphores();
+	InitGhostThreads();
 }
 void ResetBoard()
 {
@@ -1467,8 +1676,9 @@ void CheckPelletCollision()
 		// play sound
 		gState.game_score += 10;
 	}
-	else if (tile == 'o') {
+	else if (tile == 'o' && !gState.powerPelletMode) {
 		collided = true;
+		gState.powerPelletMode = true;
 		gState.game_score += 50;
 		gState.energizer_time = fright_time*1000;
 
@@ -1513,6 +1723,9 @@ void CheckGhostCollision()
 				gState.first_life = false;
 				StartPacManDeath();
 				printf("RESET\n");
+				for(int i=0;i<4;i++)
+					sem_post(&ghostTerminateSemaphore[i]);
+				printf("Destroyed semaphores\n");
 			}
 		}
 	}
@@ -1527,19 +1740,24 @@ void UpdateWave(int ms_elapsed)
 	if (gState.wave_time / 1000 >= wave_times[gState.wave_counter]) {
 		gState.wave_counter++;
 		printf("New wave\n");
-		if(gState.energizer_time <= 0)
+		if(gState.energizer_time <= 0){
 			SetAllGhostState(GetGlobalTarget());
+			gState.powerPelletMode = false;
+		}
 		gState.wave_time = 0;
 	}
 
 }
 void UpdateEnergizerTime(int ms_elasped)
 {
-	if (gState.energizer_time <= 0)
+	if (gState.energizer_time <= 0){
+		gState.powerPelletMode = false;
 		return;
+	}
 
 	gState.energizer_time -= ms_elasped;
 	if (gState.energizer_time <= 0) {
+		gState.powerPelletMode = false;
 		SetAllGhostState(GetGlobalTarget());
 	}
 }
@@ -1558,9 +1776,15 @@ void CheckWin()
         gState.sem_b_input = false;
 		gState.player->stopped = true;
 		gState.pause_time = 2000;
+		
 		SetPulseFrequency(200);
+		for(int i=0;i<4;i++)
+			sem_post(&ghostTerminateSemaphore[i]);
+		printf("Destroyed semaphores\n");
+
 	}
 }
+
 void MainLoop(int ms_elapsed)
 {
 	if (gState.player_eat_ghost) {
@@ -1575,34 +1799,33 @@ void MainLoop(int ms_elapsed)
 		return;
 	}
 
-	// pacman doesnt move for one frame if he eats a pellet
-	// from the original game
-	// if (!gState.pellet_eaten)
-	// 	PlayerMovement();
-	// else gState.pellet_eaten = false;
-
     if(gState.pellet_eaten)
         gState.pellet_eaten = false;
 
-	// check collision first so less funny stuff
+	// PACMAN MOVEMENT()
+	// GHOSTS MOVEMENT()
+
 	CheckGhostCollision();
 	CheckPelletCollision();
 	
-    // MAKE THREAD FUNCTION HERE
-    UpdateGhosts();
 	UpdateWave(ms_elapsed);
 	UpdateEnergizerTime(ms_elapsed);
 	CheckHighScore();
 	CheckWin();
-
 	AnimateUpdate(ms_elapsed);
 	DrawFrame();
 }
+
 void GameStart(int ms_elasped)
 {
     gState.sem_b_input = false;
+	
 	gState.pause_time -= ms_elasped;
 	if (gState.pause_time <= 0) {
+		printf("Now start movement\n");
+		for(int i=0;i<4;i++){
+			sem_post(&ghostSemaphores[i]);
+		}
 		gState.game_state = MAINLOOP;
 		SetPulseFrequency(150);
 	}
@@ -1619,12 +1842,15 @@ void GameLose(int ms_elapsed)
 			gState.pause_time = 5000;
 			for (int i = 0; i < 4; i++)
 				gState.ghosts[i]->enable_draw = false;
+
+			for(int i=0;i<4;i++)
+				sem_destroy(&ghostSemaphores[i]);
+			
 			gState.player->enable_draw = false;
 		}
 		else {
 			gState.game_state = GAMESTART;
 			gState.pause_time = 2000;
-			
 			ResetGhostsAndPlayer();
 		}
 	}
@@ -1640,6 +1866,7 @@ void GameWin(int ms_elapsed)
 		ResetBoard();
 		ResetGhostsAndPlayer();
 		gState.pause_time = 2000;
+		
 		gState.game_state = GAMESTART;
 	}
 	AnimateUpdate(ms_elapsed);
@@ -1732,6 +1959,8 @@ int main()
         std::cerr << "Failed to create player movement thread: " << std::endl;
         return 1;
     }
+	InitGhostSemaphores();
+	InitGhostThreads();
 
     while (window.isOpen()) {
         sf::Event event;
@@ -1750,9 +1979,7 @@ int main()
             }
         }
 
-        // Lock the mutex before accessing shared resources
         pthread_mutex_lock(&mutex);
-
         Dir inputDir = NONE;
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up))
             inputDir = UP;
@@ -1764,8 +1991,6 @@ int main()
             inputDir = LEFT;
         
         gState.inputDir = inputDir;
-
-        // Unlock the mutex after accessing shared resources
         pthread_mutex_unlock(&mutex);
 
         elapsed = clock.restart();
