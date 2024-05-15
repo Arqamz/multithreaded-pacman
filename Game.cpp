@@ -1262,15 +1262,17 @@ sem_t ghostSemaphores[4];
 sem_t ghostTerminateSemaphore[4];
 
 // Semaphore to start game engine threads
-sem_t startGameThreads;
+sem_t startGameThreads[4];
 // Semaphore to terminate the other threads
 sem_t gameThreadTerminationSemaphore;
 
 void StartGameThreads()
 {	
-	printf("SIGNAL TO CREATE ALL THREADS\n");
+	printf("SIGNAL TO START ALL THREADS\n");
 	// Game enginee threads
-	sem_post(&startGameThreads);
+	for (int i = 0; i < 4; ++i) {
+        sem_post(&startGameThreads[i]); // Post semaphore 4 times to release all threads
+    }
 	// Ghost threads
 	for (int i = 0; i < 4; i++) {
 		sem_post(&ghostSemaphores[i]);
@@ -1351,7 +1353,7 @@ void InitPacmanThread(){
         std::cerr << "Failed to create player movement thread: " << std::endl;
 		return;
     }
-	printf("Pacman Thread created");
+	printf("Pacman Thread created\n");
 }
 
 void InitGhostSemaphores() {
@@ -1385,7 +1387,7 @@ void InitGhostThreads() {
 // Function for threading CheckPelletCollision
 void* CheckPelletCollisionThread(void* arg) {
 
-	sem_wait(&startGameThreads);
+	sem_wait(&startGameThreads[0]);
 
 	printf("Gonna start checking pellet collisions now\n");
 
@@ -1416,7 +1418,7 @@ void* CheckPelletCollisionThread(void* arg) {
 
 // Function for threading CheckGhostCollision
 void* CheckGhostCollisionThread(void* arg) {
-	sem_wait(&startGameThreads);
+	sem_wait(&startGameThreads[1]);
 
 	printf("Gonna start checking ghost collisions now\n");
     while (true) {
@@ -1443,7 +1445,7 @@ void* CheckGhostCollisionThread(void* arg) {
 
 // Function for threading CheckHighScore
 void* CheckHighScoreThread(void* arg) {
-	sem_wait(&startGameThreads);
+	sem_wait(&startGameThreads[2]);
 
 	printf("Gonna start checking highscore updations now\n");
     while (true) {
@@ -1470,7 +1472,7 @@ void* CheckHighScoreThread(void* arg) {
 
 // Function for threading CheckWin
 void* CheckWinThread(void* arg) {
-	sem_wait(&startGameThreads);
+	sem_wait(&startGameThreads[3]);
 
 	printf("Gonna start checking if all pellets on the screen are eaten now\n");
     while (true) {
@@ -1542,7 +1544,9 @@ void InitCheckWinThread() {
 
 void InitGameEngineThreads(){
 	//Initialise the game start semaphore (this semaphore will be shared by all 4 game engine threads)
-	sem_init(&startGameThreads, 0, 4);
+	for(int i=0;i<4;i++){
+		sem_init(&startGameThreads[i], 0, 0);
+	}
 
 	// Initialize the thread termination semaphore (this semaphore will be shared by all 4 game engine threads)
 	sem_init(&gameThreadTerminationSemaphore, 0, 0);
