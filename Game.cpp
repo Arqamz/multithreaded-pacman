@@ -288,7 +288,6 @@ const int global_dot_limit[4] = { 0,7,17,32 };
 
 // Ghosts.cpp
 
-
 bool InMiddleTile(sf::Vector2f pos, sf::Vector2f prev, Dir dir)
 {
 	if ((int)pos.x != (int)prev.x || (int)pos.y != (int)prev.y)
@@ -496,6 +495,19 @@ void HouseUpdate(Ghost& ghost)
 		break;
 	}
 }
+
+// CHILDTHREAD(){
+// 	CHECK IN HOUSE AND ITS CONDITIONS
+
+// 	ghostSemaphores
+// 	TRY __ATOMIC_ACQUIRE
+
+// 	YOU CAN LEAVEHOME
+// 	ELSE STAY STUCK
+
+// }
+
+
 void UpdateGhosts(int ghostNum)
 {
 	//printf("Ghost %d is being updated\n", ghostNum);
@@ -1205,253 +1217,6 @@ void MakeText(std::string string, int x, int y, sf::Color color)
 	}
 }
 
-////////// THREADINGGG PARTTT
-
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-
-pthread_mutex_t ghost_mutexes[4];
-
-// Semaphore to signal thread termination
-sem_t semaphore;
-
-// Move Ghost semaphore
-sem_t ghostSemaphores[4];
-// Semaphore to terminate ghosts
-sem_t ghostTerminateSemaphore[4];
-
-// sem_t ghostSemaphores[4];
-
-void* PlayerMovementThread(void* arg) {
-    while (true) {
-        pthread_mutex_lock(&mutex);
-
-        if(gState.sem_b_input){
-            PlayerMovement();  
-        }
-
-        pthread_mutex_unlock(&mutex);
-
-        sf::sleep(sf::milliseconds(10));
-
-        int semValue;
-        sem_getvalue(&semaphore, &semValue);
-        if (semValue == 1) {
-            break;
-        }
-    }
-    return nullptr;
-}
-
-void* GhostMovementThread(void* arg) {
-    int ghostNum = *static_cast<int*>(arg);
-    delete static_cast<int*>(arg);
-    
-    printf("Updating ghost %d in thread\n", ghostNum);
-
-    // Wait for the semaphore to be signaled before starting
-	sem_wait(&ghostSemaphores[ghostNum]);
-
-    while (true) {
-        pthread_mutex_lock(&ghost_mutexes[ghostNum]);
-        
-        UpdateGhosts(ghostNum);
-
-        pthread_mutex_unlock(&ghost_mutexes[ghostNum]);
-
-        sf::sleep(sf::milliseconds(20));
-
-        // Check if the terminate semaphore has been signaled
-        int semValue;
-        sem_getvalue(&ghostTerminateSemaphore[ghostNum], &semValue);
-        if (semValue == 1) {
-            // If semaphore was signaled, exit the loop and terminate the thread
-            printf("Thread %d terminating\n", ghostNum);
-            pthread_exit(nullptr);
-        }
-    }
-
-    return nullptr;
-}
-
-void InitGhostSemaphores() {
-    // Reinitialize ghostSemaphores with initial value 0
-    for (int i = 0; i < 4; ++i) {
-        sem_init(&ghostSemaphores[i], 0, 0);
-    }
-    // Reinitialize ghostTerminateSemaphore with initial value 0
-    for (int i = 0; i < 4; ++i) {
-        sem_init(&ghostTerminateSemaphore[i], 0, 0);
-    }
-}
-
-void InitGhostThreads() {
-    printf("We got here\n");
-    for (int i = 0; i < 4; i++) {
-        sem_init(&ghostSemaphores[i], 0, 0);
-        pthread_mutex_init(&ghost_mutexes[i], nullptr);
-        pthread_t ghostThread;
-        
-        int* ghostNum = new int(i);
-        
-        int threadErr = pthread_create(&ghostThread, nullptr, GhostMovementThread, static_cast<void*>(ghostNum));
-        if (threadErr!= 0) {
-            std::cerr << "Failed to create ghost movement thread: " << std::endl;
-            return;
-        }
-        printf("Ghost thread %d created\n", i);
-    }
-}
-
-// Function for threading CheckPelletCollision
-void* CheckPelletCollisionThread(void* arg) {
-    while (true) {
-        // Lock mutex before accessing shared state
-        pthread_mutex_lock(&mutex);
-        
-        CheckPelletCollision();
-        
-        // Unlock mutex after accessing shared state
-        pthread_mutex_unlock(&mutex);
-        
-        // Sleep for a short duration to prevent busy-waiting
-        sf::sleep(sf::milliseconds(10));
-    }
-    return nullptr;
-}
-
-// Function for threading CheckGhostCollision
-void* CheckGhostCollisionThread(void* arg) {
-    while (true) {
-        pthread_mutex_lock(&mutex);
-        
-        CheckGhostCollision();
-        
-        pthread_mutex_unlock(&mutex);
-        
-        sf::sleep(sf::milliseconds(10));
-    }
-    return nullptr;
-}
-
-// Function for threading UpdateWave
-void* UpdateWaveThread(void* arg) {
-    while (true) {
-        pthread_mutex_lock(&mutex);
-        
-        UpdateWave(*static_cast<int*>(arg));
-        
-        pthread_mutex_unlock(&mutex);
-        
-        sf::sleep(sf::milliseconds(10));
-    }
-    return nullptr;
-}
-
-// Function for threading UpdateEnergizerTime
-void* UpdateEnergizerTimeThread(void* arg) {
-    while (true) {
-        pthread_mutex_lock(&mutex);
-        
-        UpdateEnergizerTime(*static_cast<int*>(arg));
-        
-        pthread_mutex_unlock(&mutex);
-        
-        sf::sleep(sf::milliseconds(10));
-    }
-    return nullptr;
-}
-
-// Function for threading CheckHighScore
-void* CheckHighScoreThread(void* arg) {
-    while (true) {
-        pthread_mutex_lock(&mutex);
-        
-        CheckHighScore();
-        
-        pthread_mutex_unlock(&mutex);
-        
-        sf::sleep(sf::milliseconds(10));
-    }
-    return nullptr;
-}
-
-// Function for threading CheckWin
-void* CheckWinThread(void* arg) {
-    while (true) {
-        pthread_mutex_lock(&mutex);
-        
-        CheckWin();
-        
-        pthread_mutex_unlock(&mutex);
-        
-        sf::sleep(sf::milliseconds(10));
-    }
-    return nullptr;
-}
-
-// Function for initializing and starting the Pellet Collision thread
-void InitPelletCollisionThread() {
-    pthread_t pelletCollisionThread;
-    int threadErr = pthread_create(&pelletCollisionThread, nullptr, CheckPelletCollisionThread, nullptr);
-    if (threadErr != 0) {
-        std::cerr << "Failed to create CheckPelletCollision thread: " << std::endl;
-        return;
-    }
-}
-
-// Function for initializing and starting the Ghost Collision thread
-void InitGhostCollisionThread() {
-    pthread_t ghostCollisionThread;
-    int threadErr = pthread_create(&ghostCollisionThread, nullptr, CheckGhostCollisionThread, nullptr);
-    if (threadErr != 0) {
-        std::cerr << "Failed to create CheckGhostCollision thread: " << std::endl;
-        return;
-    }
-}
-
-// Function for initializing and starting the Update Wave thread
-void InitUpdateWaveThread(int ms_elapsed) {
-    pthread_t updateWaveThread;
-    int threadErr = pthread_create(&updateWaveThread, nullptr, UpdateWaveThread, static_cast<void*>(&ms_elapsed));
-    if (threadErr != 0) {
-        std::cerr << "Failed to create UpdateWave thread: " << std::endl;
-        return;
-    }
-}
-
-// Function for initializing and starting the Update Energizer Time thread
-void InitUpdateEnergizerTimeThread(int ms_elapsed) {
-    pthread_t updateEnergizerTimeThread;
-    int threadErr = pthread_create(&updateEnergizerTimeThread, nullptr, UpdateEnergizerTimeThread, static_cast<void*>(&ms_elapsed));
-    if (threadErr != 0) {
-        std::cerr << "Failed to create UpdateEnergizerTime thread: " << std::endl;
-        return;
-    }
-}
-
-// Function for initializing and starting the Check High Score thread
-void InitCheckHighScoreThread() {
-    pthread_t checkHighScoreThread;
-    int threadErr = pthread_create(&checkHighScoreThread, nullptr, CheckHighScoreThread, nullptr);
-    if (threadErr != 0) {
-        std::cerr << "Failed to create CheckHighScore thread: " << std::endl;
-        return;
-    }
-}
-
-// Function for initializing and starting the Check Win thread
-void InitCheckWinThread() {
-    pthread_t checkWinThread;
-    int threadErr = pthread_create(&checkWinThread, nullptr, CheckWinThread, nullptr);
-    if (threadErr != 0) {
-        std::cerr << "Failed to create CheckWin thread: " << std::endl;
-        return;
-    }
-}
-
-
-///////////////////////////////
-
 //GAMELOOP.h
 
 void OnStart();
@@ -1481,6 +1246,331 @@ void GameStart(int ms_elasped);
 void GameLose(int ms_elasped);
 void GameWin(int ms_elasped);
 void Menu(int ms_elapsed);
+
+////////// THREADINGGG PARTTT
+
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+pthread_mutex_t ghost_mutexes[4];
+
+// Semaphore to signal thread termination
+sem_t pacmanTerminateSemaphore;
+
+// Start Ghosts semaphore
+sem_t ghostSemaphores[4];
+// Semaphore to terminate ghosts
+sem_t ghostTerminateSemaphore[4];
+
+// Semaphore to start game engine threads
+sem_t startGameThreads;
+// Semaphore to terminate the other threads
+sem_t gameThreadTerminationSemaphore;
+
+void StartGameThreads()
+{	
+	printf("SIGNAL TO CREATE ALL THREADS\n");
+	// Game enginee threads
+	sem_post(&startGameThreads);
+	// Ghost threads
+	for (int i = 0; i < 4; i++) {
+		sem_post(&ghostSemaphores[i]);
+	}
+}
+
+void TerminateGameThreads()
+{
+	printf("ALL GAME THREADS TERMINATED\n"); // not pacman thread
+	// Game engine threads
+	sem_post(&gameThreadTerminationSemaphore);
+
+	// Terminate ghost threads
+	for (int i = 0; i < 4; i++) {
+		sem_post(&ghostTerminateSemaphore[i]);
+	}
+}
+
+void* PlayerMovementThread(void* arg) {
+    while (true) {
+        pthread_mutex_lock(&mutex);
+
+        if(gState.sem_b_input){
+            PlayerMovement();  
+        }
+
+        pthread_mutex_unlock(&mutex);
+
+        sf::sleep(sf::milliseconds(15));
+
+        int semValue;
+        sem_getvalue(&pacmanTerminateSemaphore, &semValue);
+        if (semValue == 1) {
+			printf("Pacman thread terminating\n");
+			pthread_exit(nullptr);
+        }
+    }
+	return nullptr;
+}
+
+void* GhostMovementThread(void* arg) {
+    int ghostNum = *static_cast<int*>(arg);
+    delete static_cast<int*>(arg);
+    
+	// Wait for the semaphore to be signaled before starting
+	sem_wait(&ghostSemaphores[ghostNum]);
+
+    while (true) {
+        pthread_mutex_lock(&ghost_mutexes[ghostNum]);
+        
+        UpdateGhosts(ghostNum);
+
+        pthread_mutex_unlock(&ghost_mutexes[ghostNum]);
+
+        sf::sleep(sf::milliseconds(20));
+
+        // Check if the terminate semaphore has been signaled
+        int semValue;
+        sem_getvalue(&ghostTerminateSemaphore[ghostNum], &semValue);
+        if (semValue == 1) {
+            // If semaphore was signaled, exit the loop and terminate the thread
+            printf("Ghost Thread %d terminating\n", ghostNum);
+            pthread_exit(nullptr);
+        }
+    }
+
+    return nullptr;
+}
+
+void InitPacmanThread(){
+
+    sem_init(&pacmanTerminateSemaphore, 0, 0);
+
+    // Create a thread for player movement
+    pthread_t playerThread;
+    int threadErr = pthread_create(&playerThread, nullptr, PlayerMovementThread, nullptr);
+    if (threadErr != 0) {
+        std::cerr << "Failed to create player movement thread: " << std::endl;
+		return;
+    }
+	printf("Pacman Thread created");
+}
+
+void InitGhostSemaphores() {
+    // Reinitialize ghostSemaphores with initial value 0
+    for (int i = 0; i < 4; ++i) {
+        sem_init(&ghostSemaphores[i], 0, 0);
+    }
+    // Reinitialize ghostTerminateSemaphore with initial value 0
+    for (int i = 0; i < 4; ++i) {
+        sem_init(&ghostTerminateSemaphore[i], 0, 0);
+    }
+}
+
+void InitGhostThreads() {
+	InitGhostSemaphores();
+    for (int i = 0; i < 4; i++) {
+        pthread_mutex_init(&ghost_mutexes[i], nullptr);
+        pthread_t ghostThread;
+        
+        int* ghostNum = new int(i);
+        
+        int threadErr = pthread_create(&ghostThread, nullptr, GhostMovementThread, static_cast<void*>(ghostNum));
+        if (threadErr!= 0) {
+            std::cerr << "Failed to create ghost movement thread: " << std::endl;
+            return;
+        }
+        printf("Ghost thread %d created\n", i);
+    }
+}
+
+// Function for threading CheckPelletCollision
+void* CheckPelletCollisionThread(void* arg) {
+
+	sem_wait(&startGameThreads);
+
+	printf("Gonna start checking pellet collisions now\n");
+
+    while (true) {
+        // Lock mutex before accessing shared state
+        pthread_mutex_lock(&mutex);
+        
+        CheckPelletCollision();
+        
+        // Unlock mutex after accessing shared state
+        pthread_mutex_unlock(&mutex);
+
+        // Check if the thread termination semaphore has been signaled
+        int semValue;
+        sem_getvalue(&gameThreadTerminationSemaphore, &semValue);
+        if (semValue == 1) {
+            // If semaphore was signaled, exit the loop and terminate the thread
+            printf("CheckPelletCollisionThread terminating\n");
+            pthread_exit(nullptr);
+        }
+        
+        // Sleep for a short duration to prevent busy-waiting
+        sf::sleep(sf::milliseconds(10));
+    }
+
+    return nullptr;
+}
+
+// Function for threading CheckGhostCollision
+void* CheckGhostCollisionThread(void* arg) {
+	sem_wait(&startGameThreads);
+
+	printf("Gonna start checking ghost collisions now\n");
+    while (true) {
+        pthread_mutex_lock(&mutex);
+        
+        CheckGhostCollision();
+        
+        pthread_mutex_unlock(&mutex);
+
+        // Check if the thread termination semaphore has been signaled
+        int semValue;
+        sem_getvalue(&gameThreadTerminationSemaphore, &semValue);
+        if (semValue == 1) {
+            // If semaphore was signaled, exit the loop and terminate the thread
+            printf("CheckGhostCollisionThread terminating\n");
+            pthread_exit(nullptr);
+        }
+        
+        sf::sleep(sf::milliseconds(10));
+    }
+
+    return nullptr;
+}
+
+// Function for threading CheckHighScore
+void* CheckHighScoreThread(void* arg) {
+	sem_wait(&startGameThreads);
+
+	printf("Gonna start checking highscore updations now\n");
+    while (true) {
+        pthread_mutex_lock(&mutex);
+        
+        CheckHighScore();
+        
+        pthread_mutex_unlock(&mutex);
+
+        // Check if the thread termination semaphore has been signaled
+        int semValue;
+        sem_getvalue(&gameThreadTerminationSemaphore, &semValue);
+        if (semValue == 1) {
+            // If semaphore was signaled, exit the loop and terminate the thread
+            printf("CheckHighScoreThread terminating\n");
+            pthread_exit(nullptr);
+        }
+        
+        sf::sleep(sf::milliseconds(10));
+    }
+
+    return nullptr;
+}
+
+// Function for threading CheckWin
+void* CheckWinThread(void* arg) {
+	sem_wait(&startGameThreads);
+
+	printf("Gonna start checking if all pellets on the screen are eaten now\n");
+    while (true) {
+        pthread_mutex_lock(&mutex);
+        
+        CheckWin();
+        
+        pthread_mutex_unlock(&mutex);
+
+        // Check if the thread termination semaphore has been signaled
+        int semValue;
+        sem_getvalue(&gameThreadTerminationSemaphore, &semValue);
+        if (semValue == 1) {
+            // If semaphore was signaled, exit the loop and terminate the thread
+            printf("CheckWinThread terminating\n");
+            pthread_exit(nullptr);
+        }
+        
+        sf::sleep(sf::milliseconds(10));
+    }
+
+    return nullptr;
+}
+
+
+// Function for initializing and starting the Pellet Collision thread
+void InitPelletCollisionThread() {
+    pthread_t pelletCollisionThread;
+    int threadErr = pthread_create(&pelletCollisionThread, nullptr, CheckPelletCollisionThread, nullptr);
+    if (threadErr != 0) {
+        std::cerr << "Failed to create CheckPelletCollision thread: " << std::endl;
+        return;
+    }
+	printf("Thread to check pellet collision created\n");
+}
+
+// Function for initializing and starting the Ghost Collision thread
+void InitGhostCollisionThread() {
+    pthread_t ghostCollisionThread;
+    int threadErr = pthread_create(&ghostCollisionThread, nullptr, CheckGhostCollisionThread, nullptr);
+    if (threadErr != 0) {
+        std::cerr << "Failed to create CheckGhostCollision thread: " << std::endl;
+        return;
+    }
+	printf("Thread to check ghost collision created\n");
+}
+
+// Function for initializing and starting the Check High Score thread
+void InitCheckHighScoreThread() {
+    pthread_t checkHighScoreThread;
+    int threadErr = pthread_create(&checkHighScoreThread, nullptr, CheckHighScoreThread, nullptr);
+    if (threadErr != 0) {
+        std::cerr << "Failed to create CheckHighScore thread: " << std::endl;
+        return;
+    }
+	printf("Thread to check and update highscore created\n");
+}
+
+// Function for initializing and starting the Check Win thread
+void InitCheckWinThread() {
+    pthread_t checkWinThread;
+    int threadErr = pthread_create(&checkWinThread, nullptr, CheckWinThread, nullptr);
+    if (threadErr != 0) {
+        std::cerr << "Failed to create CheckWin thread: " << std::endl;
+        return;
+    }
+	printf("Thread to check win created\n");
+}
+
+void InitGameEngineThreads(){
+	//Initialise the game start semaphore (this semaphore will be shared by all 4 game engine threads)
+	sem_init(&startGameThreads, 0, 4);
+
+	// Initialize the thread termination semaphore (this semaphore will be shared by all 4 game engine threads)
+	sem_init(&gameThreadTerminationSemaphore, 0, 0);
+
+	// Initialize and start the Pellet Collision thread
+	InitPelletCollisionThread();
+
+	// Initialize and start the Ghost Collision thread
+	InitGhostCollisionThread();
+
+	// Initialize and start the Check High Score thread
+	InitCheckHighScoreThread();
+
+	// Initialize and start the Check Win thread
+	InitCheckWinThread();
+}
+
+void InitThreads() {
+
+	// Initialise and start the (4) Ghost threads
+	InitGhostThreads();
+
+	// Initialise the (4) game engine threads
+	InitGameEngineThreads();
+
+}
+
+///////////////////////////////
 
 //GAMELOOP.cpp
 
@@ -1627,8 +1717,7 @@ void ResetGhostsAndPlayer()
 		gState.using_global_counter = true;
 	
 	gState.global_dot_counter = 0;
-	InitGhostSemaphores();
-	InitGhostThreads();
+	InitThreads();
 }
 void ResetBoard()
 {
@@ -1723,9 +1812,7 @@ void CheckGhostCollision()
 				gState.first_life = false;
 				StartPacManDeath();
 				printf("RESET\n");
-				for(int i=0;i<4;i++)
-					sem_post(&ghostTerminateSemaphore[i]);
-				printf("Destroyed semaphores\n");
+				TerminateGameThreads();
 			}
 		}
 	}
@@ -1778,10 +1865,7 @@ void CheckWin()
 		gState.pause_time = 2000;
 		
 		SetPulseFrequency(200);
-		for(int i=0;i<4;i++)
-			sem_post(&ghostTerminateSemaphore[i]);
-		printf("Destroyed semaphores\n");
-
+		TerminateGameThreads();
 	}
 }
 
@@ -1805,13 +1889,17 @@ void MainLoop(int ms_elapsed)
 	// PACMAN MOVEMENT()
 	// GHOSTS MOVEMENT()
 
-	CheckGhostCollision();
-	CheckPelletCollision();
-	
+	// MAKE THREADS OF THESE
+	// CheckGhostCollision();
+	// CheckPelletCollision();
+
 	UpdateWave(ms_elapsed);
 	UpdateEnergizerTime(ms_elapsed);
-	CheckHighScore();
-	CheckWin();
+
+	// CheckHighScore();
+	// CheckWin();
+
+
 	AnimateUpdate(ms_elapsed);
 	DrawFrame();
 }
@@ -1823,9 +1911,7 @@ void GameStart(int ms_elasped)
 	gState.pause_time -= ms_elasped;
 	if (gState.pause_time <= 0) {
 		printf("Now start movement\n");
-		for(int i=0;i<4;i++){
-			sem_post(&ghostSemaphores[i]);
-		}
+		StartGameThreads();
 		gState.game_state = MAINLOOP;
 		SetPulseFrequency(150);
 	}
@@ -1949,18 +2035,14 @@ int main()
     sf::Clock clock;
     sf::Time elapsed;
 
-    // Initialize the semaphore with an initial value of 0
-    sem_init(&semaphore, 0, 0);
+	// Initialise and start the Pacman movement thread
+	InitPacmanThread();
 
-    // Create a thread for player movement
-    pthread_t playerThread;
-    int threadErr = pthread_create(&playerThread, nullptr, PlayerMovementThread, nullptr);
-    if (threadErr != 0) {
-        std::cerr << "Failed to create player movement thread: " << std::endl;
-        return 1;
-    }
-	InitGhostSemaphores();
-	InitGhostThreads();
+	// Initialise the rest of the threads (ghost and other game engine threads like collisions, etc)
+	// InitThreads();
+
+	// Pacman thread is separate here because it is a non stopping thread that uses a binary semaphore to work or not
+	// The other threads are terminated and created on the start of every round
 
     while (window.isOpen()) {
         sf::Event event;
@@ -1997,11 +2079,9 @@ int main()
         GameLoop(elapsed.asMilliseconds());
     }
 
-    // Signal the semaphore to indicate thread termination
-    sem_post(&semaphore);
-
-    // Wait for the player thread to terminate
-    pthread_join(playerThread, nullptr);
+    // Signal the semaphore to indicate pacman thread termination
+	// The other threads are created and destroyed inside the actual game loop
+    sem_post(&pacmanTerminateSemaphore);
 
     OnQuit();
 
