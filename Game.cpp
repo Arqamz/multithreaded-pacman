@@ -143,6 +143,8 @@ struct GameState
 	int pause_time = 0;
 	int wave_time = 0;
 
+	bool boostedGhost[4] = {0};
+
 	sf::RenderWindow* window;
 };
 
@@ -1266,6 +1268,8 @@ sem_t startGameThreads[4];
 // Semaphore to terminate the other threads
 sem_t gameThreadTerminationSemaphore;
 
+sem_t boostSemaphore;
+
 void StartGameThreads()
 {	
 	printf("SIGNAL TO START ALL THREADS\n");
@@ -1320,14 +1324,34 @@ void* GhostMovementThread(void* arg) {
 	// Wait for the semaphore to be signaled before starting
 	sem_wait(&ghostSemaphores[ghostNum]);
 
+	// Attempt to acquire the semaphore for boosting
+    int acquireResult = sem_trywait(&boostSemaphore);
+
+    if (acquireResult == 0) {
+        // Ghost successfully acquired the boost semaphore
+        printf("Ghost %d acquired boost\n", ghostNum);
+        gState.boostedGhost[ghostNum] = true;
+    } else {
+        // Ghost failed to acquire the boost semaphore, reset the boosted status
+        gState.boostedGhost[ghostNum] = false;
+    }
+
     while (true) {
         pthread_mutex_lock(&ghost_mutexes[ghostNum]);
         
         UpdateGhosts(ghostNum);
 
+		bool boosted = gState.boostedGhost[ghostNum];
+
+		if (boosted){
+			sf::sleep(sf::milliseconds(25));
+		}
+		else{
+			sf::sleep(sf::milliseconds(50));
+		}
+		
         pthread_mutex_unlock(&ghost_mutexes[ghostNum]);
 
-        sf::sleep(sf::milliseconds(20));
 
         // Check if the terminate semaphore has been signaled
         int semValue;
@@ -1566,6 +1590,9 @@ void InitGameEngineThreads(){
 
 void InitThreads() {
 
+	// Initialize the boost semaphore
+    sem_init(&boostSemaphore, 0, 2);
+
 	// Initialise and start the (4) Ghost threads
 	InitGhostThreads();
 
@@ -1667,6 +1694,7 @@ void Init()
 
     gState.sem_b_input = false;
 }
+
 void ResetGhostsAndPlayer()
 {
 	Ghost* temp = gState.ghosts[0];
