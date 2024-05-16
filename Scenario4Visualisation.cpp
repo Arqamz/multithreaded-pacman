@@ -55,10 +55,10 @@ int main() {
         printf("Thread %d created\n", *ghostNum);
     }
 
-    // // Join threads (not necessary for this example since threads run indefinitely)
-    // for (int i = 0; i < NUM_GHOSTS; ++i) {
-    //     pthread_join(ghostThreads[i], nullptr);
-    // }
+    // Join threads (not necessary for this example since threads run indefinitely)
+    for (int i = 0; i < NUM_GHOSTS; ++i) {
+        pthread_join(ghostThreads[i], nullptr);
+    }
 
     sem_destroy(&keySemaphore);
     sem_destroy(&permitSemaphore);

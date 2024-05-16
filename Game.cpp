@@ -498,18 +498,6 @@ void HouseUpdate(Ghost& ghost)
 	}
 }
 
-// CHILDTHREAD(){
-// 	CHECK IN HOUSE AND ITS CONDITIONS
-
-// 	ghostSemaphores
-// 	TRY __ATOMIC_ACQUIRE
-
-// 	YOU CAN LEAVEHOME
-// 	ELSE STAY STUCK
-
-// }
-
-
 void UpdateGhosts(int ghostNum)
 {
 	//printf("Ghost %d is being updated\n", ghostNum);
@@ -1268,7 +1256,12 @@ sem_t startGameThreads[4];
 // Semaphore to terminate the other threads
 sem_t gameThreadTerminationSemaphore;
 
+// All ghosts apply for this
 sem_t boostSemaphore;
+
+// For ghosts to leave house
+sem_t keySemaphore;
+sem_t permitSemaphore;
 
 void StartGameThreads()
 {	
@@ -1321,6 +1314,12 @@ void* GhostMovementThread(void* arg) {
     int ghostNum = *static_cast<int*>(arg);
     delete static_cast<int*>(arg);
     
+	// Leaving the house
+    sem_wait(&keySemaphore);
+	sem_wait(&permitSemaphore);
+	sem_post(&keySemaphore);	
+	sem_post(&permitSemaphore);
+
 	// Wait for the semaphore to be signaled before starting
 	sem_wait(&ghostSemaphores[ghostNum]);
 
@@ -1592,6 +1591,10 @@ void InitThreads() {
 
 	// Initialize the boost semaphore
     sem_init(&boostSemaphore, 0, 2);
+
+	// Initialize the key and permit semaphores
+	sem_init(&keySemaphore, 0, 2); // Two keys available
+    sem_init(&permitSemaphore, 0, 1); // One permit available
 
 	// Initialise and start the (4) Ghost threads
 	InitGhostThreads();
