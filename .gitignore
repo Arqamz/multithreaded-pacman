@@ -1,3 +1,6 @@
+# Ignore generated exes
+bin/
+
 # Prerequisites
 *.d
 
