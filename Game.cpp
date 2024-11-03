@@ -1010,13 +1010,12 @@ void InitWalls()
 }
 void InitTextures()
 {
-	RTextures.pellets.loadFromFile("textures/dots.png");
-	RTextures.sprites.loadFromFile("textures/sprites.png");
-	RTextures.wall_map_t.loadFromFile("textures/map.png");
-	RTextures.font.loadFromFile("textures/font.png");
-	RTextures.wall_map_t_white.loadFromFile("textures/map.png");
-
-	RTextures.wall_map_t_white.loadFromFile("textures/map_white.png");
+	RTextures.pellets.loadFromFile("assets/textures/dots.png");
+	RTextures.sprites.loadFromFile("assets/textures/sprites.png");
+	RTextures.wall_map_t.loadFromFile("assets/textures/map.png");
+	RTextures.font.loadFromFile("assets/textures/font.png");
+	RTextures.wall_map_t_white.loadFromFile("assets/textures/map.png");
+	RTextures.wall_map_t_white.loadFromFile("assets/textures/map_white.png");
 }
 
 void InitPellets()
@@ -1627,7 +1626,7 @@ void LoadHighScore()
 	std::stringstream ss;
 	std::string line;
 	int hs = 0;
-	infile.open("highscore.txt");
+	infile.open("assets/highscore.txt");
 	if (!infile) {
 		gState.high_score = 0;
 		return;
@@ -1640,7 +1639,7 @@ void LoadHighScore()
 }
 void SaveHighScore()
 {
-	std::ofstream outfile("highscore.txt");
+	std::ofstream outfile("assets/highscore.txt");
 	if (!outfile.is_open())
 		printf("Cant open file!");
 	
@@ -1650,7 +1649,7 @@ void SaveHighScore()
 void InitBoard()
 {
 	std::string line;
-	std::ifstream infile("Map.txt");
+	std::ifstream infile("assets/map.txt");
 	if (!infile)
 		return;
 	while (getline(infile, line))
